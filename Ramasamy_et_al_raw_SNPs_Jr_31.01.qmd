@@ -1,0 +1,196 @@
+---
+title: "SCRI_Root_SNP"
+author: "Houston Saxe"
+date: "11/2/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+
+  pacman::p_load(snpReady,
+                 dplyr,
+                 tidyr,
+                 tidytext,
+                 naniar,
+                 ggfortify,
+                 data.table,
+                 forcats, 
+                 purrr,
+                 tibble, 
+                 caret, 
+                 ggplot2, 
+                 ggpubr, 
+                 ggcorrplot, 
+                 stringr, 
+                 fuzzyjoin, 
+                 cowplot)
+  
+```
+
+
+
+## Load SNP data
+```{r}
+SNPs = read.csv("SCRI_Root_SNP_Jr_31.01.csv")
+
+SNPs = SNPs %>% 
+  mutate(across(.cols = everything(), ~ na_if(., "-")))%>% 
+  data.frame() %>%
+  column_to_rownames(var = 'Locus') %>%
+  t() %>% 
+  data.frame()
+
+SNPs2 = SNPs %>% 
+  rownames_to_column(var = 'Hybrid')
+
+fwrite(SNPs2, 'R_qtl_SCRI_Root_SNPs_Jr_31.01.csv')
+
+# weirdSNP = SNPs %>% select(starts_with('X31.01_Jm6D_11'))
+```
+
+# Checking SNP distribution
+```{r}
+t = SNPs %>%
+  as.data.frame() %>%
+  pivot_longer(everything())
+
+t[is.na(t)] = 'NA'
+
+head(t)
+
+ggplot(t, aes(value))+
+  geom_histogram(stat = 'count')
+```
+
+```{r}
+## Convert all "a"s to "A"s and "b"s to "B"s
+SNPs[SNPs == "a"] <- 1
+
+SNPs[SNPs == "b"] <- 2
+
+## Replace "-" with NAs
+SNPs = SNPs %>% 
+  data.frame() %>% 
+  mutate(across(everything(), as.numeric)) %>% 
+  as.matrix()
+
+
+head(as.data.frame(SNPs))
+dim(SNPs)
+```
+
+# For r QTL
+## Processing function from snpReady (mainly to impute the missing values)
+```{r}
+geno.ready = raw.data(data = SNPs,
+                      frame = "wide", 
+                      base = F, 
+                      sweep.sample = 0.5,
+                      call.rate = 0.95, 
+                      maf = 0.1, 
+                      imput = F,
+                      # imput.type = "knni", 
+                      outfile = "012", 
+                      plot = T)
+
+head(geno.ready$report)
+```
+
+# Get cleaned SNP matrix
+```{r}
+Mmat = geno.ready$M.clean
+
+head(as.data.frame(Mmat))
+```
+
+## Obtain the processed data
+```{r}
+M <- geno.ready$M.clean %>%
+  as.data.frame() %>%
+  mutate(across(everything(), ~ case_when(.x == 1 ~ 'a',
+                                          .x == 2 ~ 'b',
+                                          T ~ NA))) %>% 
+  rownames_to_column(var = 'Hybrid') 
+
+head(as.data.frame(M))
+
+# M %>% select(starts_with('X31.01_Jm6D_11'))
+  
+
+fwrite(M, 'SCRI_ROOT_SNPs_cleaned_rQTL_Jr_31.01.csv')
+```
+
+# For RFE
+## Processing function from snpReady (mainly to impute the missing values)
+```{r}
+geno.ready_RFE = raw.data(data = SNPs,
+                      frame = "wide", 
+                      base = F, 
+                      sweep.sample = 0.5,
+                      call.rate = 0.95, 
+                      maf = 0.1, 
+                      imput = T,
+                      imput.type = "knni",
+                      outfile = "012", 
+                      plot = T)
+
+head(geno.ready_RFE$report)
+```
+
+# Get cleaned SNP matrix
+```{r}
+Mmat = geno.ready_RFE$M.clean
+
+head(as.data.frame(Mmat))
+```
+
+## Obtain the processed data
+```{r}
+M <- geno.ready_RFE$M.clean %>%
+  as.data.frame() %>%
+  rownames_to_column(var = 'Hybrid') 
+
+head(as.data.frame(M))
+
+# M %>% select(starts_with('X31.01_Jm6D_11'))
+  
+
+fwrite(M, 'SCRI_ROOT_SNPs_cleaned_RFE_Jr_31.01.csv')
+```
+
+```{r}
+dim(M) - dim(SNPs)
+## 52 SNPs removed
+```
+
+# Arrange SNPs by chromosomal location
+```{r}
+M = fread('SCRI_ROOT_SNPs_cleaned_Jr_31.01.csv')
+
+snpStat = M %>% 
+  as.data.frame() %>% 
+  column_to_rownames(var = 'Hybrid') %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = 'SNP') %>%
+  mutate(Chrom_Loc = str_extract(SNP, '(?<=_).*?$'), 
+         chromosome = str_extract(SNP, '\\d[:alpha:]')) %>%
+  mutate(Location = as.numeric(str_extract(Chrom_Loc, '(?<=_).*?$'))) %>% 
+  group_by(chromosome) %>% 
+  arrange(chromosome, Location) %>% 
+  mutate(SNP_number = row_number(),
+         Avg_Distance_Kb = ((max(Location)-min(Location))/n())/1000) %>%
+  relocate(chromosome, 
+           Chrom_Loc,
+           Location,
+           SNP_number,
+           Avg_Distance_Kb) %>% 
+  ungroup()
+
+summary(snpStat$Avg_Distance_Kb)
+```
