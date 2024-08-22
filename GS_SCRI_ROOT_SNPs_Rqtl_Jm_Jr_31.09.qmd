@@ -1,0 +1,2583 @@
+---
+title: "Machine_Learning_SCRI_ROOT_SNPs"
+author: "Houston Saxe"
+date: "1/26/2022"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load packages
+```{r}
+pacman::p_load(tidyr, 
+               dplyr,
+               # plyr,
+               tibble, 
+               caret, 
+               mlbench,
+               caTools,
+               mlr,
+               randomForest,
+               data.table,
+               stringr,
+               ggprism,
+               ggtext,
+               openxlsx,
+               rrBLUP,
+               qtl)
+```
+
+
+## Machine learning
+### Get SNP data
+```{r}
+M1 = fread('SCRI_ROOT_SNPs_cleaned_RFE_Jm_31.09.csv') 
+
+M2 = fread('SCRI_ROOT_SNPs_cleaned_RFE_Jr_31.09.csv')
+
+M = M1 %>% 
+  left_join(M2)
+
+# RNAseq_dat = M %>% 
+#   select(Hybrid,X31.09_Jm4D_26359154) %>% 
+#   filter(Hybrid %like% 'MS1_36|MS1_41|MS1_56|MS1_122')
+
+```
+
+# Make list for prediction performances
+```{r}
+prediction_performances = list()
+```
+
+
+# Read in rfe results
+```{r}
+rfe_res_all = readRDS('rfe_results_NEM_2and3_year_length_2and3_year_CG_PHY_Jm_Jr_31.09.RData')
+
+# rfe_res_all = list()
+```
+
+# Get NEM phenotype data
+```{r}
+NEM_pheno = fread('C:/Users/hsaxe/Box/ALAB/GitHub/SCRI_ROOT_2/SCRI_Phenotype_Analysis/2_3_Year_RLN_Counts_and_tree_lengths.csv') %>% 
+  mutate(CAL_Wip_ID = gsub(' ', '', CAL_Wip_ID) %>% 
+           gsub('-', '_', .)) %>% 
+  rename_with(~ gsub('length', 'Height', .)) %>% 
+  # Perform transformation on RLN data per Andreas's methods and because heteroscedasticity
+  mutate(RLN_2Y = log10(RLN_2Y + 1),
+         RLN_3Y = log10(RLN_3Y + 1))
+
+NEM_pheno %>% 
+  filter(CAL_Wip_ID %like% 'MS1.36|MS1.41|MS1.56|MS1.122')
+
+# CAL_Wip_ID, length_2Y, RLN_2Y, length_3Y, RLN_3Y
+```
+
+## RLN_2Y Merge with SNP data
+```{r}
+RLN_2Y = list(name = 'RLN_2Y')
+
+RLN_2Y$data = M %>% 
+  left_join(dplyr::select(NEM_pheno, CAL_Wip_ID, RLN_2Y), 
+            by = c('Hybrid' = names(NEM_pheno)[1])) %>% 
+  relocate(RLN_2Y)
+
+length(RLN_2Y$data$RLN_2Y[is.na(RLN_2Y$data$RLN_2Y) == T])
+```
+
+### Drop NAs
+```{r}
+RLN_2Y$data = RLN_2Y$data %>% 
+  drop_na()
+
+min = RLN_2Y$data$RLN_2Y[RLN_2Y$data$RLN_2Y > 0] %>% 
+  min()
+
+RLN_2Y$data = RLN_2Y$data %>% 
+  mutate(RLN_2Y = ifelse(RLN_2Y == 0, min, RLN_2Y))
+
+summary(RLN_2Y$data$RLN_2Y)
+  
+```
+
+
+
+### What are the most important QTLs for RLN_2Y?
+
+### RFE approach
+```{r}
+rfedat = RLN_2Y$data %>%
+  dplyr::select(!Hybrid) %>% 
+  mutate(across(.cols = everything(), as.numeric))
+
+ctrl <- rfeControl(functions = rfFuncs,
+                   method = "repeatedcv",
+                   repeats = 5,
+                   number = 10,
+                   verbose = FALSE)
+
+# rfe_res_all$RLN_2Y = rfe(RLN_2Y ~ ., rfedat, rfeControl = ctrl,
+#                          cores = 8)
+
+
+RLN_2Y$RFE_RF$rfe = rfe_res_all$RLN_2Y
+
+RLN_2Y$RFE_RF$rfe
+
+```
+
+#### Distribution of phenotype data
+```{r}
+ggplot(RLN_2Y$data, aes(RLN_2Y))+
+ geom_density()
+```
+
+### Function for repeating data split and model performance validation
+```{r}
+RF_reps = function(times = 5, data, pheno, desc = F, rfe_res){
+  
+  results = list()
+  
+  for(i in 1:times){
+    
+    set.seed(i)
+    
+    rows = createDataPartition(data[[pheno]], 
+                             times = 1, 
+                             p = 0.7, 
+                             list = F)
+  
+  train = data[rows,]
+  
+  test = data[-rows,]
+  
+  mod = caret::train(as.formula(paste(pheno ,
+                                      paste(rfe_res[["RFE_RF"]][["rfe"]][["variables"]][["var"]]
+                                            [1:8], collapse = ' + '),
+                                      sep = ' ~ ')),
+                     data = train,
+                     method = 'rf')
+  
+  # Make predictions using the model
+  p = predict.train(mod, test)
+  
+  dat = data.frame(predicted = p,
+                   actual = test[[pheno]])
+  # Select top or bottom 25% by predicted column for selection performance
+  if(desc == F){
+     selection = dat %>% 
+    arrange(predicted) %>% 
+    slice(1:round(nrow(.)*0.25,
+                digits = 0))
+  }else{
+     selection = dat %>% 
+    arrange(desc(predicted)) %>% 
+    slice(1:round(nrow(.)*0.25,
+                digits = 0))
+  }
+ 
+  # Compare actual data selected by predictions vs unselected actual data
+  if(desc == F){
+    test_res = t.test(selection$actual, dat$actual,
+                      alternative = 'less')
+  }else{
+      test_res = t.test(selection$actual, dat$actual,
+                      alternative = 'greater')
+  }
+  
+  # Store dat in the results list
+  results[[i]] = list(cor.test(dat$predicted, 
+                               dat$actual,
+                               method = 'pearson',
+                               alternative = 'greater'),
+                      dat,
+                      selection,
+                      test_res)
+    
+  }
+  
+  return(results)
+  
+}
+```
+
+#### Performance estimate
+```{r}
+RLN_2Y$RFE_RF$performance = RF_reps(times = 15, 
+                                    desc = F,
+                                    data = RLN_2Y$data,
+                                    pheno = 'RLN_2Y', 
+                                    rfe_res = RLN_2Y)
+
+# RLN_2Y$RFE_RF$performance
+
+```
+
+### Manhattan plot
+
+### R/qtl requires chromosomes in second row. This chunk achieves that
+```{r}
+rqtl_dat1 = fread('SCRI_ROOT_SNPs_cleaned_rQTL_Jm_31.09.csv')%>% 
+  left_join(dplyr::select(NEM_pheno, CAL_Wip_ID, RLN_2Y), 
+            by = c('Hybrid' = names(NEM_pheno)[1])) %>% 
+  relocate(RLN_2Y)
+
+rqtl_dat2 = fread('SCRI_ROOT_SNPs_cleaned_rQTL_Jr_31.09.csv')%>% 
+  left_join(dplyr::select(NEM_pheno, CAL_Wip_ID, RLN_2Y), 
+            by = c('Hybrid' = names(NEM_pheno)[1])) %>% 
+  relocate(RLN_2Y)
+
+RLN_2Y$rqtl_dat = rqtl_dat1 %>% 
+  left_join(rqtl_dat2)
+
+Names = colnames(RLN_2Y$rqtl_dat)
+
+Chromosomes = colnames(RLN_2Y$rqtl_dat) %>% 
+  str_extract(., '\\dS(?=_\\d)|\\dD(?=_\\d)') %>% 
+  as.data.frame() %>% 
+  t() %>% 
+  as.data.frame()
+
+colnames(Chromosomes) = Names
+
+fwrite(rbind(Chromosomes, RLN_2Y$rqtl_dat,
+                    fill = T), 'R_qtl_data/R_qtl_RLN_2Y_data_Jm_Jr_31.09.csv')
+```
+
+
+```{r}
+RLN_2Y$cross = read.cross(format = "csv", 
+                          dir = getwd(), 
+                          file = 'R_qtl_data/R_qtl_RLN_2Y_data_Jm_Jr_31.09.csv', 
+                          genotypes=c('a', 'b'),
+                          alleles=c('a', 'b'))
+```
+
+
+```{r}
+RLN_2Y$cross = calc.genoprob(RLN_2Y$cross, step = 1)
+
+summary(RLN_2Y$cross)
+```
+
+
+```{r}
+plot(RLN_2Y$cross)
+```
+
+#### Get marker LODs, significance, and Percent variance explained with method 'mr'
+```{r}
+set.seed(1)
+
+RLN_2Y$QTLs = scanone(RLN_2Y$cross, method = 'mr')
+
+RLN_2Y$QTLs = RLN_2Y$QTLs %>% 
+  mutate(perc_var_explained = (1-20^((-2/nind(RLN_2Y$cross))*lod))*100)
+
+
+RLN_2Y$perm = scanone(RLN_2Y$cross, 
+                      method = 'mr',
+                      n.perm = 1000,
+                      n.cluster = 8)
+
+
+summary(RLN_2Y$perm)
+
+summary(RLN_2Y$QTLs, 
+        perms = RLN_2Y$perm,
+        alpha = 0.05)
+```
+
+#### Make data for manhattan plot with higher resolution method 'em'
+```{r}
+RLN_2Y$manhattan_dat = scanone(RLN_2Y$cross, method = 'em')
+```
+
+```{r}
+summary(RLN_2Y$manhattan_dat)
+```
+
+
+```{r}
+plot(RLN_2Y$manhattan_dat,
+     col = 'green')
+```
+
+
+```{r}
+manhattan_dat = RLN_2Y$QTLs %>%
+  data.frame() %>%
+  rownames_to_column(var = 'Marker') %>% 
+  mutate(number = 1:n(),
+         Haplotype = case_when(grepl('Jm', Marker) ~ 'J. microcarpa',
+                               grepl('Jr', Marker) ~ 'J. regia',
+                               T ~ NA)) %>% 
+  group_by(chr) %>%
+  mutate(loc_num = 1:n(),
+         middle = ceiling(n()/2),
+         chromosome2 = ifelse(loc_num == middle, as.character(chr), NA),
+         chr_breaks = ifelse(loc_num == middle, number, NA)) %>% 
+  group_by(chr, Haplotype) %>% 
+  mutate(Hap_num = 1:n(),
+         chromosome3 = ifelse(Hap_num == max(Hap_num) & Haplotype == 'J. microcarpa', as.character(chr), NA))
+
+```
+
+
+#### Plot
+```{r}
+limit = round(length(manhattan_dat$lod)/1000)*1000
+
+RLN_2Y$manhattan_plot = ggplot(manhattan_dat,
+                               aes(number, lod,
+                                   color = Haplotype))+
+  geom_point()+
+  # ggtitle(expression(paste('Two-year ', italic('P. vulnus'))))+
+  labs(title = '<span style="font-weight: bold;">Two-year <em>P. vulnus</em></span>') +
+  theme_prism()+
+  scale_x_continuous(
+    # limits = c(0, limit),
+                    # breaks = seq(0,limit, by = limit/10)
+                    breaks = manhattan_dat$chr_breaks
+                    )+
+  coord_cartesian(clip = "off") +
+  annotate(geom = "text",
+           x = 1:nrow(manhattan_dat),
+           y = min(manhattan_dat$lod),
+           label = manhattan_dat$chromosome3,
+           vjust = 4,
+           fontface = 2,
+           size = 4
+  )+
+  theme(plot.margin = unit(c(1,
+                             1,
+                             2,
+                             1), 
+                           "lines"),
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = c(0.7,
+                            0.9),
+        plot.title = ggtext::element_markdown(),
+        text = element_text(face = 'bold'),
+        legend.text = element_text(face = "bold.italic")
+  )+
+  geom_hline(yintercept = summary(RLN_2Y$perm)[1],
+               linetype = 'dashed',
+               linewidth = 1)
+
+RLN_2Y$manhattan_plot
+```
+
+### rrBLUP (ridge regression) approach
+
+#### Make results list
+```{r}
+RLN_2Y$rrBLUP = list()
+```
+
+
+### Function for repeating data split and model performance validation
+```{r}
+rrBLUP_reps = function(times = 5, data, pheno, desc = F){
+  
+  results = list()
+  
+  # markers = list()
+  
+  for(i in 1:times){
+    
+    set.seed(i)
+    
+    rows = createDataPartition(data[[pheno]], 
+                             times = 1, 
+                             p = 0.7, 
+                             list = F)
+  
+  train = data[rows,]
+  
+  test = data[-rows,]
+  
+  # Extract the phenotype (response variable) for training data and convert it to a matrix
+pheno_train = train[[pheno]] %>% 
+  as.matrix()
+
+# Extract the phenotype for testing data and convert it to a matrix
+pheno_test = test[[pheno]] %>% 
+  as.matrix()
+
+# Extract marker data for training, excluding the RLN_2Y and Hybrid columns, and convert it to a matrix
+marker_train = train %>% select(!c(all_of(pheno), Hybrid)) %>% 
+  as.matrix()
+
+# Extract marker data for testing, excluding the RLN_2Y and Hybrid columns, and convert it to a matrix
+marker_test = test %>% select(!c(all_of(pheno), Hybrid)) %>% 
+  as.matrix()
+
+answer = mixed.solve(pheno_train,
+                     Z = marker_train,
+                     K = NULL,
+                     SE = F,
+                     return.Hinv = F)
+
+e = as.matrix(answer$u)
+
+results$markers[[i]] = e
+
+pred_pheno_test = marker_test %*% e
+
+pred_pheno = pred_pheno_test[,1] + c(answer$beta)
+
+dat = data.frame(predicted = pred_pheno,
+                   actual = pheno_test)
+  
+  # Select top or bottom 25% by predicted column for selection performance
+  if(desc == F){
+     selection = dat %>% 
+    arrange(predicted) %>% 
+    slice(1:round(nrow(.)*0.25,
+                digits = 0))
+  }else{
+     selection = dat %>% 
+    arrange(desc(predicted)) %>% 
+    slice(1:round(nrow(.)*0.25,
+                digits = 0))
+  }
+ 
+  # Compare actual data selected by predictions vs unselected actual data
+ if(desc == F){
+    test_res = t.test(selection$actual, dat$actual,
+                      alternative = 'less')
+  }else{
+      test_res = t.test(selection$actual, dat$actual,
+                      alternative = 'greater')
+  }
+  
+# Store dat in the results list
+results$performance[[i]] = list(cor.test(dat$predicted, 
+                                         dat$actual,
+                                         method = 'pearson',
+                                         alternative = 'greater'),
+                                dat,
+                                selection,
+                                test_res)
+
+    
+  }
+  
+  # return(markers)
+  
+  return(results)
+  
+}
+```
+
+#### Performance estimate
+```{r}
+RLN_2Y$rrBLUP = rrBLUP_reps(times = 15, 
+                            desc = F,
+                            data = RLN_2Y$data, 
+                            pheno = 'RLN_2Y')
+```
+
+
+## RLN_3Y Merge with SNP data
+```{r}
+RLN_3Y = list(name = 'RLN_3Y')
+
+RLN_3Y$data = M %>% 
+  left_join(dplyr::select(NEM_pheno, CAL_Wip_ID, RLN_3Y), 
+            by = c('Hybrid' = names(NEM_pheno)[1])) %>% 
+  relocate(RLN_3Y)
+
+length(RLN_3Y$data$RLN_3Y[is.na(RLN_3Y$data$RLN_3Y) == T])
+```
+
+### Drop NAs
+```{r}
+RLN_3Y$data = RLN_3Y$data %>% 
+  drop_na()
+
+min = RLN_3Y$data$RLN_3Y[RLN_3Y$data$RLN_3Y > 0] %>% 
+  min()
+
+RLN_3Y$data = RLN_3Y$data %>% 
+  mutate(RLN_3Y = ifelse(RLN_3Y == 0, min, RLN_3Y))
+
+summary(RLN_3Y$data$RLN_3Y)
+  
+```
+
+
+
+### What are the most important QTLs for RLN_3Y?
+
+### RFE approach
+```{r}
+rfedat = RLN_3Y$data %>%
+  dplyr::select(!Hybrid) %>%
+  mutate(across(.cols = everything(), as.numeric))
+
+ctrl <- rfeControl(functions = rfFuncs,
+                   method = "repeatedcv",
+                   repeats = 5,
+                   number = 10,
+                   verbose = FALSE)
+
+# rfe_res_all$RLN_3Y = rfe(RLN_3Y ~ ., rfedat, rfeControl = ctrl,
+#                          cores = 8)
+
+
+RLN_3Y$RFE_RF$rfe = rfe_res_all$RLN_3Y
+
+RLN_3Y$RFE_RF$rfe
+
+```
+
+#### Distribution of phenotype data
+```{r}
+ggplot(RLN_3Y$data, aes(RLN_3Y))+
+ geom_density()
+```
+
+#### Performance estimate
+```{r}
+# Function is defined in RLN_2Y analysis
+
+RLN_3Y$RFE_RF$performance = RF_reps(times = 15, 
+                                    desc = F,
+                                    data = RLN_3Y$data, 
+                                    pheno = 'RLN_3Y', 
+                                    rfe_res = RLN_3Y)
+```
+
+### Manhattan plot
+
+### R/qtl requires chromosomes in second row. This chunk achieves that
+```{r}
+rqtl_dat1 = fread('SCRI_ROOT_SNPs_cleaned_rQTL_Jm_31.09.csv')%>% 
+  left_join(dplyr::select(NEM_pheno, CAL_Wip_ID, RLN_3Y), 
+            by = c('Hybrid' = names(NEM_pheno)[1])) %>% 
+  relocate(RLN_3Y)
+
+rqtl_dat2 = fread('SCRI_ROOT_SNPs_cleaned_rQTL_Jr_31.09.csv')%>% 
+  left_join(dplyr::select(NEM_pheno, CAL_Wip_ID, RLN_3Y), 
+            by = c('Hybrid' = names(NEM_pheno)[1])) %>% 
+  relocate(RLN_3Y)
+
+RLN_3Y$rqtl_dat = rqtl_dat1 %>% 
+  left_join(rqtl_dat2)
+
+Names = colnames(RLN_3Y$rqtl_dat)
+
+Chromosomes = colnames(RLN_3Y$rqtl_dat) %>% 
+  str_extract(., '\\dS(?=_\\d)|\\dD(?=_\\d)') %>% 
+  as.data.frame() %>% 
+  t() %>% 
+  as.data.frame()
+
+colnames(Chromosomes) = Names
+
+fwrite(rbind(Chromosomes, RLN_3Y$rqtl_dat,
+                    fill = T), 'R_qtl_data/R_qtl_RLN_3Y_data_Jm_Jr_31.09.csv')
+```
+
+
+```{r}
+RLN_3Y$cross = read.cross(format = "csv", 
+                          dir = getwd(), 
+                          file = 'R_qtl_data/R_qtl_RLN_3Y_data_Jm_Jr_31.09.csv', 
+                          genotypes=c('a', 'b'),
+                          alleles=c('a', 'b'))
+```
+
+
+```{r}
+RLN_3Y$cross = calc.genoprob(RLN_3Y$cross, step = 1)
+
+summary(RLN_3Y$cross)
+```
+
+
+```{r}
+plot(RLN_3Y$cross)
+```
+
+#### Get marker LODs and Percent variance explained with method 'mr'
+```{r}
+set.seed(1)
+
+RLN_3Y$QTLs = scanone(RLN_3Y$cross, method = 'mr')
+
+
+RLN_3Y$QTLs = RLN_3Y$QTLs %>% 
+  mutate(perc_var_explained = (1-20^((-2/nind(RLN_3Y$cross))*lod))*100)
+
+RLN_3Y$perm = scanone(RLN_3Y$cross, 
+                      method = 'mr',
+                      n.perm = 1000,
+                      n.cluster = 8)
+
+
+summary(RLN_3Y$perm)
+
+summary(RLN_3Y$QTLs, 
+        perms = RLN_3Y$perm,
+        alpha = 0.05)
+```
+
+#### Make data for manhattan plot with higher resolution method 'em'
+```{r}
+RLN_3Y$manhattan_dat = scanone(RLN_3Y$cross, method = 'em')
+```
+
+```{r}
+summary(RLN_3Y$manhattan_dat)
+```
+
+
+```{r}
+plot(RLN_3Y$manhattan_dat,
+     col = 'green')
+```
+
+
+```{r}
+manhattan_dat = RLN_3Y$QTLs %>%
+  data.frame() %>%
+  rownames_to_column(var = 'Marker') %>% 
+  mutate(number = 1:n(),
+         Haplotype = case_when(grepl('Jm', Marker) ~ 'J. microcarpa',
+                               grepl('Jr', Marker) ~ 'J. regia',
+                               T ~ NA)) %>% 
+  group_by(chr) %>%
+  mutate(loc_num = 1:n(),
+         middle = ceiling(n()/2),
+         chromosome2 = ifelse(loc_num == middle, as.character(chr), NA),
+         chr_breaks = ifelse(loc_num == middle, number, NA)) %>% 
+  group_by(chr, Haplotype) %>% 
+  mutate(Hap_num = 1:n(),
+         chromosome3 = ifelse(Hap_num == max(Hap_num) & Haplotype == 'J. microcarpa', as.character(chr), NA))
+
+```
+
+
+#### Plot
+```{r}
+limit = round(length(manhattan_dat$lod)/1000)*1000
+
+RLN_3Y$manhattan_plot = ggplot(manhattan_dat,
+                               aes(number, lod,
+                                   color = Haplotype))+
+  geom_point()+
+  # ggtitle(expression(paste('Three-year ', italic('P. vulnus'))))+
+  labs(title = '<span style="font-weight: bold;">Three-year <em>P. vulnus</em></span>') +
+  theme_prism()+
+  scale_x_continuous(
+    # limits = c(0, limit),
+                    # breaks = seq(0,limit, by = limit/10)
+                    breaks = manhattan_dat$chr_breaks
+                    )+
+  coord_cartesian(clip = "off") +
+  annotate(geom = "text",
+           x = 1:nrow(manhattan_dat),
+           y = min(manhattan_dat$lod),
+           label = manhattan_dat$chromosome3,
+           vjust = 4,
+           fontface = 2,
+           size = 4
+  )+
+  theme(plot.margin = unit(c(1,
+                             1,
+                             2,
+                             1), 
+                           "lines"),
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = c(0.7,
+                            0.9),
+        plot.title = ggtext::element_markdown(),
+        text = element_text(face = 'bold'),
+        legend.text = element_text(face = "bold.italic")
+  )+
+  geom_hline(yintercept = summary(RLN_3Y$perm)[1],
+               linetype = 'dashed',
+               linewidth = 1)
+
+RLN_3Y$manhattan_plot
+```
+
+### rrBLUP (ridge regression) approach
+
+#### Make results list
+```{r}
+RLN_3Y$rrBLUP = list()
+```
+
+#### Performance estimate
+```{r}
+# Function is defined in RLN_2Y analysis
+
+RLN_3Y$rrBLUP = rrBLUP_reps(times = 15, 
+                            desc = F,
+                            data = RLN_3Y$data, 
+                            pheno = 'RLN_3Y')
+```
+
+### Performance results
+```{r}
+# RLN_3Y$RFE_RF$performance
+```
+
+```{r}
+# RLN_3Y$rrBLUP$performance
+```
+
+
+## Height_2Y Merge with SNP data
+```{r}
+Height_2Y = list(name = 'Height_2Y')
+
+Height_2Y$data = M %>% 
+  left_join(dplyr::select(NEM_pheno, CAL_Wip_ID, Height_2Y), 
+            by = c('Hybrid' = names(NEM_pheno)[1])) %>% 
+  relocate(Height_2Y)
+
+length(Height_2Y$data$Height_2Y[is.na(Height_2Y$data$Height_2Y) == T])
+```
+
+### Drop NAs
+```{r}
+Height_2Y$data = Height_2Y$data %>% 
+  drop_na()
+
+min = Height_2Y$data$Height_2Y[Height_2Y$data$Height_2Y > 0] %>% 
+  min()
+
+Height_2Y$data = Height_2Y$data %>% 
+  mutate(Height_2Y = ifelse(Height_2Y == 0, min, Height_2Y))
+
+summary(Height_2Y$data$Height_2Y)
+  
+```
+
+
+
+### What are the most important QTLs for Height_2Y?
+
+### RFE approach
+```{r}
+rfedat = Height_2Y$data %>%
+  dplyr::select(!Hybrid) %>%
+  mutate(across(.cols = everything(), as.numeric))
+
+ctrl <- rfeControl(functions = rfFuncs,
+                   method = "repeatedcv",
+                   repeats = 5,
+                   number = 10,
+                   verbose = FALSE)
+
+rfe_res_all$Height_2Y = rfe(Height_2Y ~ ., rfedat, rfeControl = ctrl,
+                            cores = 8)
+
+
+Height_2Y$RFE_RF$rfe = rfe_res_all$Height_2Y
+
+Height_2Y$RFE_RF$rfe
+
+```
+
+#### Distribution of phenotype data
+```{r}
+ggplot(Height_2Y$data, aes(Height_2Y))+
+ geom_density()
+```
+
+#### Performance estimate
+```{r}
+# Function is defined in RLN_2Y analysis
+
+Height_2Y$RFE_RF$performance = RF_reps(times = 15, 
+                                       desc = T,
+                                       data = Height_2Y$data, 
+                                       pheno = 'Height_2Y', 
+                                       rfe_res = Height_2Y)
+```
+
+### Manhattan plot
+
+### R/qtl requires chromosomes in second row. This chunk achieves that
+```{r}
+rqtl_dat1 = fread('SCRI_ROOT_SNPs_cleaned_rQTL_Jm_31.09.csv')%>% 
+  left_join(dplyr::select(NEM_pheno, CAL_Wip_ID, Height_2Y), 
+            by = c('Hybrid' = names(NEM_pheno)[1])) %>% 
+  relocate(Height_2Y)
+
+rqtl_dat2 = fread('SCRI_ROOT_SNPs_cleaned_rQTL_Jr_31.09.csv')%>% 
+  left_join(dplyr::select(NEM_pheno, CAL_Wip_ID, Height_2Y), 
+            by = c('Hybrid' = names(NEM_pheno)[1])) %>% 
+  relocate(Height_2Y)
+
+Height_2Y$rqtl_dat = rqtl_dat1 %>% 
+  left_join(rqtl_dat2)
+
+Names = colnames(Height_2Y$rqtl_dat)
+
+Chromosomes = colnames(Height_2Y$rqtl_dat) %>% 
+  str_extract(., '\\dS(?=_\\d)|\\dD(?=_\\d)') %>% 
+  as.data.frame() %>% 
+  t() %>% 
+  as.data.frame()
+
+colnames(Chromosomes) = Names
+
+fwrite(rbind(Chromosomes, Height_2Y$rqtl_dat,
+                    fill = T), 'R_qtl_data/R_qtl_Height_2Y_data_Jm_Jr_31.09.csv')
+```
+
+
+```{r}
+Height_2Y$cross = read.cross(format = "csv", 
+                          dir = getwd(), 
+                          file = 'R_qtl_data/R_qtl_Height_2Y_data_Jm_Jr_31.09.csv', 
+                          genotypes=c('a', 'b'),
+                          alleles=c('a', 'b'))
+```
+
+
+```{r}
+Height_2Y$cross = calc.genoprob(Height_2Y$cross, step = 1)
+
+summary(Height_2Y$cross)
+```
+
+
+```{r}
+plot(Height_2Y$cross)
+```
+
+#### Get marker LODs and Percent variance explained with method 'mr'
+```{r}
+set.seed(1)
+
+Height_2Y$QTLs = scanone(Height_2Y$cross, method = 'mr')
+
+
+Height_2Y$QTLs = Height_2Y$QTLs %>% 
+  mutate(perc_var_explained = (1-20^((-2/nind(Height_2Y$cross))*lod))*100)
+
+Height_2Y$perm = scanone(Height_2Y$cross, 
+                      method = 'mr',
+                      n.perm = 1000,
+                      n.cluster = 8)
+
+
+summary(Height_2Y$perm)
+
+summary(Height_2Y$QTLs, 
+        perms = Height_2Y$perm,
+        alpha = 0.05)
+```
+
+#### Make data for manhattan plot with higher resolution method 'em'
+```{r}
+Height_2Y$manhattan_dat = scanone(Height_2Y$cross, method = 'em')
+```
+
+```{r}
+summary(Height_2Y$manhattan_dat)
+```
+
+
+```{r}
+plot(Height_2Y$manhattan_dat,
+     col = 'green')
+```
+
+
+```{r}
+manhattan_dat = Height_2Y$QTLs %>%
+  data.frame() %>%
+  rownames_to_column(var = 'Marker') %>% 
+  mutate(number = 1:n(),
+         Haplotype = case_when(grepl('Jm', Marker) ~ 'J. microcarpa',
+                               grepl('Jr', Marker) ~ 'J. regia',
+                               T ~ NA)) %>% 
+  group_by(chr) %>%
+  mutate(loc_num = 1:n(),
+         middle = ceiling(n()/2),
+         chromosome2 = ifelse(loc_num == middle, as.character(chr), NA),
+         chr_breaks = ifelse(loc_num == middle, number, NA)) %>% 
+  group_by(chr, Haplotype) %>% 
+  mutate(Hap_num = 1:n(),
+         chromosome3 = ifelse(Hap_num == max(Hap_num) & Haplotype == 'J. microcarpa', as.character(chr), NA))
+
+```
+
+
+#### Plot
+```{r}
+limit = round(length(manhattan_dat$lod)/1000)*1000
+
+Height_2Y$manhattan_plot = ggplot(manhattan_dat,
+                               aes(number, lod,
+                                   color = Haplotype))+
+  geom_point()+
+  ggtitle('Two-year Tree Height')+
+  theme_prism()+
+  scale_x_continuous(
+    # limits = c(0, limit),
+                    # breaks = seq(0,limit, by = limit/10)
+                    breaks = manhattan_dat$chr_breaks
+                    )+
+  coord_cartesian(clip = "off") +
+  annotate(geom = "text",
+           x = 1:nrow(manhattan_dat),
+           y = min(manhattan_dat$lod),
+           label = manhattan_dat$chromosome3,
+           vjust = 4,
+           fontface = 2,
+           size = 4
+  )+
+  theme(plot.margin = unit(c(1,
+                             1,
+                             2,
+                             1), 
+                           "lines"),
+        axis.title.x = element_blank(),
+        # axis.text.x = element_text(size = 7),
+        axis.text.x = element_blank(),
+        legend.position = c(0.7,
+                            0.9),
+        plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'),
+        legend.text = element_text(face = "bold.italic")
+  )+
+  geom_hline(yintercept = summary(Height_2Y$perm)[1],
+               linetype = 'dashed',
+               linewidth = 1)
+
+Height_2Y$manhattan_plot
+```
+
+### rrBLUP (ridge regression) approach
+
+#### Make results list
+```{r}
+Height_2Y$rrBLUP = list()
+```
+
+#### Performance estimate
+```{r}
+# Function is defined in RLN_2Y analysis
+
+Height_2Y$rrBLUP = rrBLUP_reps(times = 15, 
+                               desc = T,
+                               data = Height_2Y$data, 
+                               pheno = 'Height_2Y')
+```
+
+### Performance results
+```{r}
+# Height_2Y$RFE_RF$performance
+```
+
+```{r}
+# Height_2Y$rrBLUP$performance
+```
+
+
+## Height_3Y Merge with SNP data
+```{r}
+Height_3Y = list(name = 'Height_3Y')
+
+Height_3Y$data = M %>% 
+  left_join(dplyr::select(NEM_pheno, CAL_Wip_ID, Height_3Y), 
+            by = c('Hybrid' = names(NEM_pheno)[1])) %>% 
+  relocate(Height_3Y)
+
+length(Height_3Y$data$Height_3Y[is.na(Height_3Y$data$Height_3Y) == T])
+```
+
+### Drop NAs
+```{r}
+Height_3Y$data = Height_3Y$data %>% 
+  drop_na()
+
+min = Height_3Y$data$Height_3Y[Height_3Y$data$Height_3Y > 0] %>% 
+  min()
+
+Height_3Y$data = Height_3Y$data %>% 
+  mutate(Height_3Y = ifelse(Height_3Y == 0, min, Height_3Y))
+
+summary(Height_3Y$data$Height_3Y)
+  
+```
+
+
+
+### What are the most important QTLs for Height_3Y?
+
+### RFE approach
+```{r}
+rfedat = Height_3Y$data %>%
+  dplyr::select(!Hybrid) %>%
+  mutate(across(.cols = everything(), as.numeric))
+
+ctrl <- rfeControl(functions = rfFuncs,
+                   method = "repeatedcv",
+                   repeats = 5,
+                   number = 10,
+                   verbose = FALSE)
+
+# rfe_res_all$Height_3Y = rfe(Height_3Y ~ ., rfedat, rfeControl = ctrl,
+#                             cores = 8)
+
+
+Height_3Y$RFE_RF$rfe = rfe_res_all$Height_3Y
+
+Height_3Y$RFE_RF$rfe
+
+```
+
+#### Distribution of phenotype data
+```{r}
+ggplot(Height_3Y$data, aes(Height_3Y))+
+ geom_density()
+```
+
+#### Performance estimate
+```{r}
+# Function is defined in RLN_2Y analysis
+
+Height_3Y$RFE_RF$performance = RF_reps(times = 15, 
+                                       desc = T,
+                                       data = Height_3Y$data, 
+                                       pheno = 'Height_3Y', 
+                                       rfe_res = Height_3Y)
+```
+
+### Manhattan plot
+
+### R/qtl requires chromosomes in second row. This chunk achieves that
+```{r}
+rqtl_dat1 = fread('SCRI_ROOT_SNPs_cleaned_rQTL_Jm_31.09.csv')%>% 
+  left_join(dplyr::select(NEM_pheno, CAL_Wip_ID, Height_3Y), 
+            by = c('Hybrid' = names(NEM_pheno)[1])) %>% 
+  relocate(Height_3Y)
+
+rqtl_dat2 = fread('SCRI_ROOT_SNPs_cleaned_rQTL_Jr_31.09.csv')%>% 
+  left_join(dplyr::select(NEM_pheno, CAL_Wip_ID, Height_3Y), 
+            by = c('Hybrid' = names(NEM_pheno)[1])) %>% 
+  relocate(Height_3Y)
+
+Height_3Y$rqtl_dat = rqtl_dat1 %>% 
+  left_join(rqtl_dat2)
+
+Names = colnames(Height_3Y$rqtl_dat)
+
+Chromosomes = colnames(Height_3Y$rqtl_dat) %>% 
+  str_extract(., '\\dS(?=_\\d)|\\dD(?=_\\d)') %>% 
+  as.data.frame() %>% 
+  t() %>% 
+  as.data.frame()
+
+colnames(Chromosomes) = Names
+
+fwrite(rbind(Chromosomes, Height_3Y$rqtl_dat,
+                    fill = T), 'R_qtl_data/R_qtl_Height_3Y_data_Jm_Jr_31.09.csv')
+```
+
+
+```{r}
+Height_3Y$cross = read.cross(format = "csv", 
+                          dir = getwd(), 
+                          file = 'R_qtl_data/R_qtl_Height_3Y_data_Jm_Jr_31.09.csv', 
+                          genotypes=c('a', 'b'),
+                          alleles=c('a', 'b'))
+```
+
+
+```{r}
+Height_3Y$cross = calc.genoprob(Height_3Y$cross, step = 1)
+
+summary(Height_3Y$cross)
+```
+
+
+```{r}
+plot(Height_3Y$cross)
+```
+
+#### Get marker LODs and Percent variance explained with method 'mr'
+```{r}
+set.seed(1)
+
+Height_3Y$QTLs = scanone(Height_3Y$cross, method = 'mr')
+
+
+Height_3Y$QTLs = Height_3Y$QTLs %>% 
+  mutate(perc_var_explained = (1-20^((-2/nind(Height_3Y$cross))*lod))*100)
+
+Height_3Y$perm = scanone(Height_3Y$cross, 
+                      method = 'mr',
+                      n.perm = 1000,
+                      n.cluster = 8)
+
+
+summary(Height_3Y$perm)
+
+summary(Height_3Y$QTLs, 
+        perms = Height_3Y$perm,
+        alpha = 0.05)
+```
+
+#### Make data for manhattan plot with higher resolution method 'em'
+```{r}
+Height_3Y$manhattan_dat = scanone(Height_3Y$cross, method = 'em')
+```
+
+```{r}
+summary(Height_3Y$manhattan_dat)
+```
+
+
+```{r}
+plot(Height_3Y$manhattan_dat,
+     col = 'green')
+```
+
+
+```{r}
+manhattan_dat = Height_3Y$QTLs %>%
+  data.frame() %>%
+  rownames_to_column(var = 'Marker') %>% 
+  mutate(number = 1:n(),
+         Haplotype = case_when(grepl('Jm', Marker) ~ 'J. microcarpa',
+                               grepl('Jr', Marker) ~ 'J. regia',
+                               T ~ NA)) %>% 
+  group_by(chr) %>%
+  mutate(loc_num = 1:n(),
+         middle = ceiling(n()/2),
+         chromosome2 = ifelse(loc_num == middle, as.character(chr), NA),
+         chr_breaks = ifelse(loc_num == middle, number, NA)) %>% 
+  group_by(chr, Haplotype) %>% 
+  mutate(Hap_num = 1:n(),
+         chromosome3 = ifelse(Hap_num == max(Hap_num) & Haplotype == 'J. microcarpa', as.character(chr), NA))
+
+```
+
+
+#### Plot
+```{r}
+limit = round(length(manhattan_dat$lod)/1000)*1000
+
+Height_3Y$manhattan_plot = ggplot(manhattan_dat,
+                               aes(number, lod,
+                                   color = Haplotype))+
+  geom_point()+
+  ggtitle('Three-year Tree Height')+
+  theme_prism()+
+  scale_x_continuous(
+    # limits = c(0, limit),
+                    # breaks = seq(0,limit, by = limit/10)
+                    breaks = manhattan_dat$chr_breaks
+                    )+
+  coord_cartesian(clip = "off") +
+  annotate(geom = "text",
+           x = 1:nrow(manhattan_dat),
+           y = min(manhattan_dat$lod),
+           label = manhattan_dat$chromosome3,
+           vjust = 4,
+           fontface = 2,
+           size = 4
+  )+
+  theme(plot.margin = unit(c(1,
+                             1,
+                             2,
+                             1), 
+                           "lines"),
+        axis.title.x = element_blank(),
+        # axis.text.x = element_text(size = 7),
+        axis.text.x = element_blank(),
+        legend.position = c(0.7,
+                            0.9),
+        plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'),
+        legend.text = element_text(face = "bold.italic")
+  )+
+  geom_hline(yintercept = summary(Height_3Y$perm)[1],
+               linetype = 'dashed',
+               linewidth = 1)
+
+Height_3Y$manhattan_plot
+```
+
+### rrBLUP (ridge regression) approach
+
+#### Make results list
+```{r}
+Height_3Y$rrBLUP = list()
+```
+
+#### Performance estimate
+```{r}
+# Function is defined in RLN_2Y analysis
+
+Height_3Y$rrBLUP = rrBLUP_reps(times = 15, 
+                               desc = T,
+                               data = Height_3Y$data, 
+                               pheno = 'Height_3Y')
+```
+
+### Performance results
+```{r}
+# Height_3Y$RFE_RF$performance
+```
+
+```{r}
+# Height_3Y$rrBLUP$performance
+```
+
+# Get CG phenotype data
+```{r}
+## What are the most important variables for this model?
+CG_pheno = fread('C:/Users/hsaxe/Box/ALAB/GitHub/SCRI_ROOT_2/SCRI_Phenotype_Analysis/CG_Avg_Score.csv') %>% 
+  mutate(CAL_Wip_ID = gsub(' ', '', CAL_Wip_ID) %>% 
+           gsub('-', '_', .))
+```
+
+## CG_Avg Merge with SNP data
+```{r}
+CG_Avg = list(name = 'CG_Avg')
+
+CG_Avg$data = M %>% 
+  left_join(dplyr::select(CG_pheno, CAL_Wip_ID, CG_Avg), 
+            by = c('Hybrid' = names(CG_pheno)[1])) %>% 
+  relocate(CG_Avg)
+
+length(CG_Avg$data$CG_Avg[is.na(CG_Avg$data$CG_Avg) == T])
+```
+
+### Drop NAs
+```{r}
+CG_Avg$data = CG_Avg$data %>% 
+  drop_na()
+
+min = CG_Avg$data$CG_Avg[CG_Avg$data$CG_Avg > 0] %>% 
+  min()
+
+CG_Avg$data = CG_Avg$data %>% 
+  mutate(CG_Avg = ifelse(CG_Avg == 0, min, CG_Avg))
+
+summary(CG_Avg$data$CG_Avg)
+  
+```
+
+
+
+### What are the most important QTLs for CG_Avg?
+
+### RFE approach
+```{r}
+rfedat = CG_Avg$data %>%
+  dplyr::select(!Hybrid) %>%
+  mutate(across(.cols = everything(), as.numeric))
+
+ctrl <- rfeControl(functions = rfFuncs,
+                   method = "repeatedcv",
+                   repeats = 5,
+                   number = 10,
+                   verbose = FALSE)
+
+# rfe_res_all$CG_Avg = rfe(CG_Avg ~ ., rfedat, rfeControl = ctrl,
+#                          cores = 8)
+
+
+CG_Avg$RFE_RF$rfe = rfe_res_all$CG_Avg
+
+CG_Avg$RFE_RF$rfe
+
+```
+
+#### Distribution of phenotype data
+```{r}
+ggplot(CG_Avg$data, aes(CG_Avg))+
+ geom_density()
+```
+
+#### Performance estimate
+```{r}
+# Function is defined in RLN_2Y analysis
+
+CG_Avg$RFE_RF$performance = RF_reps(times = 15, 
+                                    desc = F,
+                                    data = CG_Avg$data, 
+                                    pheno = 'CG_Avg', 
+                                    rfe_res = CG_Avg)
+```
+
+### Manhattan plot
+
+### R/qtl requires chromosomes in second row. This chunk achieves that
+```{r}
+rqtl_dat1 = fread('SCRI_ROOT_SNPs_cleaned_rQTL_Jm_31.09.csv')%>% 
+  left_join(dplyr::select(CG_pheno, CAL_Wip_ID, CG_Avg), 
+            by = c('Hybrid' = names(CG_pheno)[1])) %>% 
+  relocate(CG_Avg)
+
+rqtl_dat2 = fread('SCRI_ROOT_SNPs_cleaned_rQTL_Jr_31.09.csv')%>% 
+  left_join(dplyr::select(CG_pheno, CAL_Wip_ID, CG_Avg), 
+            by = c('Hybrid' = names(CG_pheno)[1])) %>% 
+  relocate(CG_Avg)
+
+CG_Avg$rqtl_dat = rqtl_dat1 %>% 
+  left_join(rqtl_dat2)
+
+Names = colnames(CG_Avg$rqtl_dat)
+
+Chromosomes = colnames(CG_Avg$rqtl_dat) %>% 
+  str_extract(., '\\dS(?=_\\d)|\\dD(?=_\\d)') %>% 
+  as.data.frame() %>% 
+  t() %>% 
+  as.data.frame()
+
+colnames(Chromosomes) = Names
+
+fwrite(rbind(Chromosomes, CG_Avg$rqtl_dat,
+                    fill = T), 'R_qtl_data/R_qtl_CG_Avg_data_Jm_Jr_31.09.csv')
+```
+
+
+```{r}
+CG_Avg$cross = read.cross(format = "csv", 
+                          dir = getwd(), 
+                          file = 'R_qtl_data/R_qtl_CG_Avg_data_Jm_Jr_31.09.csv', 
+                          genotypes=c('a', 'b'),
+                          alleles=c('a', 'b'))
+```
+
+
+```{r}
+CG_Avg$cross = calc.genoprob(CG_Avg$cross, step = 1)
+
+summary(CG_Avg$cross)
+```
+
+
+```{r}
+plot(CG_Avg$cross)
+```
+
+#### Get marker LODs and Percent variance explained with method 'mr'
+```{r}
+set.seed(1)
+
+CG_Avg$QTLs = scanone(CG_Avg$cross, method = 'mr')
+
+
+CG_Avg$QTLs = CG_Avg$QTLs %>% 
+  mutate(perc_var_explained = (1-20^((-2/nind(CG_Avg$cross))*lod))*100)
+
+CG_Avg$perm = scanone(CG_Avg$cross, 
+                      method = 'mr',
+                      n.perm = 1000,
+                      n.cluster = 8)
+
+
+summary(CG_Avg$perm)
+
+summary(CG_Avg$QTLs, 
+        perms = CG_Avg$perm,
+        alpha = 0.05)
+```
+
+#### Make data for manhattan plot with higher resolution method 'em'
+```{r}
+CG_Avg$manhattan_dat = scanone(CG_Avg$cross, method = 'em')
+```
+
+```{r}
+summary(CG_Avg$manhattan_dat)
+```
+
+
+```{r}
+plot(CG_Avg$manhattan_dat,
+     col = 'green')
+```
+
+
+```{r}
+manhattan_dat = CG_Avg$QTLs %>%
+  data.frame() %>%
+  rownames_to_column(var = 'Marker') %>% 
+  mutate(number = 1:n(),
+         Haplotype = case_when(grepl('Jm', Marker) ~ 'J. microcarpa',
+                               grepl('Jr', Marker) ~ 'J. regia',
+                               T ~ NA)) %>% 
+  group_by(chr) %>%
+  mutate(loc_num = 1:n(),
+         middle = ceiling(n()/2),
+         chromosome2 = ifelse(loc_num == middle, as.character(chr), NA),
+         chr_breaks = ifelse(loc_num == middle, number, NA)) %>% 
+  group_by(chr, Haplotype) %>% 
+  mutate(Hap_num = 1:n(),
+         chromosome3 = ifelse(Hap_num == max(Hap_num) & Haplotype == 'J. microcarpa', as.character(chr), NA))
+
+```
+
+
+#### Plot
+```{r}
+limit = round(length(manhattan_dat$lod)/1000)*1000
+
+CG_Avg$manhattan_plot = ggplot(manhattan_dat,
+                               aes(number, lod,
+                                   color = Haplotype))+
+  geom_point()+
+  # ggtitle(expression(italic('A. tumefaciens')))+
+  labs(title = '<span style="font-weight: bold;"><em>A. tumefaciens</em></span>') +
+  theme_prism()+
+  scale_x_continuous(
+    # limits = c(0, limit),
+                    # breaks = seq(0,limit, by = limit/10)
+                    breaks = manhattan_dat$chr_breaks
+                    )+
+  coord_cartesian(clip = "off") +
+  annotate(geom = "text",
+           x = 1:nrow(manhattan_dat),
+           y = min(manhattan_dat$lod),
+           label = manhattan_dat$chromosome3,
+           vjust = 4,
+           fontface = 2,
+           size = 4
+  )+
+  theme(plot.margin = unit(c(1,
+                             1,
+                             2,
+                             1), 
+                           "lines"),
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = c(0.7,
+                            0.9),
+        plot.title = ggtext::element_markdown(),
+        text = element_text(face = 'bold'),
+        legend.text = element_text(face = "bold.italic")
+  )+
+  geom_hline(yintercept = summary(CG_Avg$perm)[1],
+               linetype = 'dashed',
+               linewidth = 1)
+
+CG_Avg$manhattan_plot
+```
+
+### rrBLUP (ridge regression) approach
+
+#### Make results list
+```{r}
+CG_Avg$rrBLUP = list()
+```
+
+#### Performance estimate
+```{r}
+# Function is defined in RLN_2Y analysis
+
+CG_Avg$rrBLUP = rrBLUP_reps(times = 15, 
+                            desc = F,
+                            data = CG_Avg$data, 
+                            pheno = 'CG_Avg')
+```
+
+### Performance results
+```{r}
+# CG_Avg$RFE_RF$performance
+```
+
+```{r}
+# CG_Avg$rrBLUP$performance
+```
+
+
+# Get PHY phenotype data
+```{r}
+## What are the most important variables for this model?
+PHY_pheno = fread('C:/Users/hsaxe/Box/ALAB/GitHub/SCRI_ROOT_2/SCRI_Phenotype_Analysis/PHY_Avg_Score.csv') %>% 
+  mutate(CAL_Wip_ID = gsub(' ', '', CAL_Wip_ID) %>% 
+           gsub('-', '_', .))
+```
+
+## PHY_Avg Merge with SNP data
+```{r}
+PHY_Avg = list(name = 'PHY_Avg')
+
+PHY_Avg$data = M %>% 
+  left_join(dplyr::select(PHY_pheno, CAL_Wip_ID, PHY_Avg), 
+            by = c('Hybrid' = names(PHY_pheno)[1])) %>% 
+  relocate(PHY_Avg)
+
+length(PHY_Avg$data$PHY_Avg[is.na(PHY_Avg$data$PHY_Avg) == T])
+```
+
+### Drop NAs
+```{r}
+PHY_Avg$data = PHY_Avg$data %>% 
+  drop_na()
+
+min = PHY_Avg$data$PHY_Avg[PHY_Avg$data$PHY_Avg > 0] %>% 
+  min()
+
+PHY_Avg$data = PHY_Avg$data %>% 
+  mutate(PHY_Avg = ifelse(PHY_Avg == 0, min, PHY_Avg))
+
+summary(PHY_Avg$data$PHY_Avg)
+  
+```
+
+
+
+### What are the most important QTLs for PHY_Avg?
+
+### RFE approach
+```{r}
+rfedat = PHY_Avg$data %>%
+  dplyr::select(!Hybrid) %>%
+  mutate(across(.cols = everything(), as.numeric))
+
+ctrl <- rfeControl(functions = rfFuncs,
+                   method = "repeatedcv",
+                   repeats = 5,
+                   number = 10,
+                   verbose = FALSE)
+
+# rfe_res_all$PHY_Avg = rfe(PHY_Avg ~ ., rfedat, rfeControl = ctrl,
+#                          cores = 8)
+
+
+PHY_Avg$RFE_RF$rfe = rfe_res_all$PHY_Avg
+
+PHY_Avg$RFE_RF$rfe
+
+```
+
+#### Distribution of phenotype data
+```{r}
+ggplot(PHY_Avg$data, aes(PHY_Avg))+
+ geom_density()
+```
+
+#### Performance estimate
+```{r}
+# Function is defined in RLN_2Y analysis
+
+PHY_Avg$RFE_RF$performance = RF_reps(times = 15, 
+                                     desc = F,
+                                     data = PHY_Avg$data, 
+                                     pheno = 'PHY_Avg', 
+                                     rfe_res = PHY_Avg)
+```
+
+### Manhattan plot
+
+### R/qtl requires chromosomes in second row. This chunk achieves that
+```{r}
+rqtl_dat1 = fread('SCRI_ROOT_SNPs_cleaned_rQTL_Jm_31.09.csv')%>% 
+  left_join(dplyr::select(PHY_pheno, CAL_Wip_ID, PHY_Avg), 
+            by = c('Hybrid' = names(PHY_pheno)[1])) %>% 
+  relocate(PHY_Avg)
+
+rqtl_dat2 = fread('SCRI_ROOT_SNPs_cleaned_rQTL_Jr_31.09.csv')%>% 
+  left_join(dplyr::select(PHY_pheno, CAL_Wip_ID, PHY_Avg), 
+            by = c('Hybrid' = names(PHY_pheno)[1])) %>% 
+  relocate(PHY_Avg)
+
+PHY_Avg$rqtl_dat = rqtl_dat1 %>% 
+  left_join(rqtl_dat2)
+
+Names = colnames(PHY_Avg$rqtl_dat)
+
+Chromosomes = colnames(PHY_Avg$rqtl_dat) %>% 
+  str_extract(., '\\dS(?=_\\d)|\\dD(?=_\\d)') %>% 
+  as.data.frame() %>% 
+  t() %>% 
+  as.data.frame()
+
+colnames(Chromosomes) = Names
+
+fwrite(rbind(Chromosomes, PHY_Avg$rqtl_dat,
+                    fill = T), 'R_qtl_data/R_qtl_PHY_Avg_data_Jm_Jr_31.09.csv')
+```
+
+
+```{r}
+PHY_Avg$cross = read.cross(format = "csv", 
+                          dir = getwd(), 
+                          file = 'R_qtl_data/R_qtl_PHY_Avg_data_Jm_Jr_31.09.csv', 
+                          genotypes=c('a', 'b'),
+                          alleles=c('a', 'b'))
+```
+
+
+```{r}
+PHY_Avg$cross = calc.genoprob(PHY_Avg$cross, step = 1)
+
+summary(PHY_Avg$cross)
+```
+
+
+```{r}
+plot(PHY_Avg$cross)
+```
+
+#### Get marker LODs and Percent variance explained with method 'mr'
+```{r}
+set.seed(1)
+
+PHY_Avg$QTLs = scanone(PHY_Avg$cross, method = 'mr')
+
+
+PHY_Avg$QTLs = PHY_Avg$QTLs %>% 
+  mutate(perc_var_explained = (1-20^((-2/nind(PHY_Avg$cross))*lod))*100)
+
+PHY_Avg$perm = scanone(PHY_Avg$cross, 
+                      method = 'mr',
+                      n.perm = 1000,
+                      n.cluster = 8)
+
+
+summary(PHY_Avg$perm)
+
+summary(PHY_Avg$QTLs, 
+        perms = PHY_Avg$perm,
+        alpha = 0.05)
+```
+
+#### Make data for manhattan plot with higher resolution method 'em'
+```{r}
+PHY_Avg$manhattan_dat = scanone(PHY_Avg$cross, method = 'em')
+```
+
+```{r}
+summary(PHY_Avg$manhattan_dat)
+```
+
+
+```{r}
+plot(PHY_Avg$manhattan_dat,
+     col = 'green')
+```
+
+
+```{r}
+manhattan_dat = PHY_Avg$QTLs %>%
+  data.frame() %>%
+  rownames_to_column(var = 'Marker') %>% 
+  mutate(number = 1:n(),
+         Haplotype = case_when(grepl('Jm', Marker) ~ 'J. microcarpa',
+                               grepl('Jr', Marker) ~ 'J. regia',
+                               T ~ NA)) %>% 
+  group_by(chr) %>%
+  mutate(loc_num = 1:n(),
+         middle = ceiling(n()/2),
+         chromosome2 = ifelse(loc_num == middle, as.character(chr), NA),
+         chr_breaks = ifelse(loc_num == middle, number, NA)) %>% 
+  group_by(chr, Haplotype) %>% 
+  mutate(Hap_num = 1:n(),
+         chromosome3 = ifelse(Hap_num == max(Hap_num) & Haplotype == 'J. microcarpa', as.character(chr), NA))
+
+```
+
+
+#### Plot
+```{r}
+limit = round(length(manhattan_dat$lod)/1000)*1000
+
+PHY_Avg$manhattan_plot = ggplot(manhattan_dat,
+                               aes(number, lod,
+                                   color = Haplotype))+
+  geom_point()+
+  # ggtitle(expression(paste(italic('Phytophthora'), ' .spp')))+
+  labs(title = '<span style="font-weight: bold;"><em>Phytophthora</em> .spp</span>') +
+  theme_prism()+
+  scale_x_continuous(
+    # limits = c(0, limit),
+                    # breaks = seq(0,limit, by = limit/10)
+                    breaks = manhattan_dat$chr_breaks
+                    )+
+  coord_cartesian(clip = "off") +
+  annotate(geom = "text",
+           x = 1:nrow(manhattan_dat),
+           y = min(manhattan_dat$lod),
+           label = manhattan_dat$chromosome3,
+           vjust = 4,
+           fontface = 2,
+           size = 4
+  )+
+  theme(plot.margin = unit(c(1,
+                             1,
+                             2,
+                             1), 
+                           "lines"),
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = c(0.7,
+                            0.9),
+        plot.title = ggtext::element_markdown(),
+        text = element_text(face = 'bold'),
+        legend.text = element_text(face = "bold.italic")
+  )+
+  geom_hline(yintercept = summary(PHY_Avg$perm)[1],
+               linetype = 'dashed',
+               linewidth = 1)
+
+PHY_Avg$manhattan_plot
+```
+
+### rrBLUP (ridge regression) approach
+
+#### Make results list
+```{r}
+PHY_Avg$rrBLUP = list()
+```
+
+#### Performance estimate
+```{r}
+# Function is defined in RLN_2Y analysis
+
+PHY_Avg$rrBLUP = rrBLUP_reps(times = 15, 
+                             desc = F,
+                             data = PHY_Avg$data, 
+                             pheno = 'PHY_Avg')
+```
+
+### Performance results
+```{r}
+# PHY_Avg$RFE_RF$performance
+```
+
+```{r}
+# PHY_Avg$rrBLUP$performance
+```
+
+
+
+## This is using phenotypic data downloaded from Ramasamy et al.
+### I modeled all variables using ridge regression and the best prediction performance still comes from averaging Root and Crown rot from Pini and Cinammomi
+### Also modeled control root rot (non-inoculated) and there was no predictive ability of the identfied QTLs
+# Get Root Rot phenotype data
+```{r}
+## What are the most important variables for this model?
+# RootRot_pheno = fread('C:/Users/hsaxe/Box/ALAB/SNP_data/SCRI/Root/PHY_Phenotyping_Ramasamy_et_al.csv') %>%
+#   select(Hybrid.progeny,
+#          MeanCtl_Root.rot....length.,
+         # MeanInoculated_Root.rot....length.,
+         # MeanInoculated_Crown.rot....length.,
+         # Mean_Inoc_minus_Ctl_Root.rot....length.,
+         # MeanInoculated_Crown.rot....length.,
+         # MeanInoculated_Root.rot....length.
+         # ) %>%
+  # mutate(Mean_Inoc_Rot = (MeanInoculated_Crown.rot....length. +
+  #                             MeanInoculated_Root.rot....length.)/2) %>%
+  # select(Hybrid.progeny,
+  #        MeanCtl_Root.rot....length.) %>%
+  # rename(Ctrl_Root_Rot_Avg = MeanCtl_Root.rot....length.,
+  #        CAL_Wip_ID = Hybrid.progeny)
+```
+
+
+
+
+# All Phenotypes together. We only have 100 hybrids will all six phenotypes or 160 with Height_3Y, RLN_3Y, CG_Avg, and PHY_Avg
+```{r}
+t = NEM_pheno %>% 
+  left_join(CG_pheno) %>% 
+  left_join(PHY_pheno) %>% 
+  left_join(M,
+            by = c('CAL_Wip_ID' = 'Hybrid')) %>% 
+  select(!c(genotype,
+            Female_Parent,
+            RLN_2Y,
+            Height_2Y,
+            Over_Height_3Y,
+            Over_RLN_3Y))
+
+complete_rows = complete.cases(t)
+
+t = t[complete_rows,]
+```
+
+
+# Saving rfe results
+```{r}
+# rfe_res_all = list(TwoY_RLN = res_NEM_2YRLN,
+#                    ThreeY_RLN = res_NEM_3YRLN,
+#                    TwoY_length = res_NEM_2Ylength,
+#                    ThreeY_length = res_NEM_3Ylength,
+#                    CG = res_CG,
+#                    PHY = res_PHY)
+# 
+# rfe_res_all
+# 
+# saveRDS(rfe_res_all, 'rfe_results_NEM_2and3_year_length_2and3_year_CG_PHY_Jm_Jr_31.09.RData')
+```
+
+# All results put into one list
+```{r}
+all_res = list(RLN_2Y = RLN_2Y,
+               RLN_3Y = RLN_3Y,
+               Height_2Y = Height_2Y,
+               Height_3Y = Height_3Y,
+               CG_Avg = CG_Avg,
+               PHY_Avg = PHY_Avg)
+
+
+
+names(all_res)
+
+# saveRDS(all_res, 'All_Traits_QTL_Selection_Results_Jm_Jr_31.09.RData')
+
+```
+
+```{r}
+all_res = readRDS('All_Traits_QTL_Selection_Results_Jm_Jr_31.09.RData')
+
+results_tables = list()
+```
+
+
+### LOD significance thresholds
+```{r}
+thresholds = lapply(all_res, FUN = function(x){summary(x$perm)[1] %>% round(digits = 2)})
+
+thresholds
+
+paste(thresholds, collapse = ', ')
+
+results_tables$thresholds_table = thresholds %>% 
+  as.data.frame() 
+```
+
+### Number of significant markers
+```{r}
+n_Markers = lapply(all_res, FUN = function(x){
+  
+  # LOD threshold calculated by permutation
+  lod_thresh = summary(x[['perm']])[1]
+  
+  
+  
+  x[["QTLs"]] %>%
+    as.data.frame() %>%
+    rownames_to_column(var = 'Marker') %>% 
+    filter(lod >= lod_thresh) %>% 
+    count(chr) %>% 
+    mutate(chr = droplevels(chr)) %>% 
+    as.list()
+    
+    
+    
+  })
+
+
+
+
+
+results_tables$n_Markers_table = n_Markers %>% 
+  as.data.frame() %>% 
+  mutate(across(everything(), as.character)) %>% 
+  pivot_longer(everything(),
+    names_to = 'Trait_chr_n',
+               values_to = 'value') %>% 
+  mutate(chr_n = str_match(Trait_chr_n, '\\.(chr|n)')[,2],
+         Trait = str_match(Trait_chr_n, '(.*?)\\.')[,2]
+         
+         ) %>% 
+  select(!Trait_chr_n) %>%
+  distinct() %>% 
+  pivot_wider(id_cols = Trait,
+              names_from = 'chr_n',
+              values_from = 'value') %>% 
+  unnest_longer(c(chr, n)) %>% 
+  rename(Markers = n)
+
+```
+
+
+### Length of significant QTLs
+```{r}
+sig_distances = lapply(all_res, FUN = function(x){
+  
+  # LOD threshold calculated by permutation
+  lod_thresh = summary(x[['perm']])[1]
+  
+  
+  
+  x[["QTLs"]] %>%
+    as.data.frame() %>%
+    rownames_to_column(var = 'Marker') %>% 
+    filter(lod >= lod_thresh) %>% 
+    mutate(Position = str_extract(Marker, "Jm.._([0-9]+)",
+                                  group = 1) %>% 
+             as.numeric(.),
+           n = max(Position)-min(Position),
+           n = format(n, big.mark = ','),
+           .by = chr) %>% 
+     mutate(chr = droplevels(chr)) %>% 
+    select(n,
+           chr) %>% 
+    distinct() %>% 
+    as.list()
+    
+    
+  
+  
+})
+
+
+
+
+
+sig_distances
+
+results_tables$sig_distances_table = sig_distances %>% 
+  as.data.frame() %>% 
+  mutate(across(everything(), as.character)) %>% 
+  pivot_longer(everything(),
+    names_to = 'Trait_chr_n',
+               values_to = 'value') %>% 
+  mutate(chr_n = str_match(Trait_chr_n, '\\.(chr|n)')[,2],
+         Trait = str_match(Trait_chr_n, '(.*?)\\.')[,2]
+         
+         ) %>% 
+  select(!Trait_chr_n) %>%
+  distinct() %>% 
+  pivot_wider(id_cols = Trait,
+              names_from = 'chr_n',
+              values_from = 'value') %>% 
+  unnest_longer(c(chr, n)) %>% 
+  select(Trait,
+         chr,
+         n) %>% 
+  rename(Distance = n)
+
+```
+
+### Top three markers QTLs
+```{r}
+top_three = lapply(all_res, FUN = function(x){
+  
+  # LOD threshold calculated by permutation
+  lod_thresh = summary(x[['perm']])[1]
+  
+  
+  
+   x[["QTLs"]] %>%
+    as.data.frame() %>%
+    rownames_to_column(var = 'Marker') %>% 
+    filter(lod >= lod_thresh) %>% 
+    slice_max(order_by = lod, n = 3) %>%
+    select(Marker) %>% 
+    unique()
+  
+})
+
+results_tables$top_three = plyr::ldply(top_three) %>%
+  pivot_wider(names_from = 'Marker',
+              values_from = '.id') %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = 'Marker') %>% 
+  dplyr::rename(Trait = V1)
+
+top_three
+```
+
+### Length of Top three markers QTLs
+```{r}
+top_distances = lapply(all_res, FUN = function(x){
+  
+  # LOD threshold calculated by permutation
+  lod_thresh = summary(x[['perm']])[1]
+  
+  
+  
+  x[["QTLs"]] %>%
+    as.data.frame() %>%
+    rownames_to_column(var = 'Marker') %>% 
+    filter(lod >= lod_thresh) %>% 
+    slice_max(order_by = lod, n = 1) %>% 
+    mutate(Position = str_extract(Marker, "Jm.._([0-9]+)",
+                                  group = 1) %>% 
+             as.numeric(.),
+           Length = max(Position)-min(Position)) %>% 
+    select(!c(pos,
+              perc_var_explained,
+              Position)) %>% 
+    unique() %>% 
+    mutate(Length = format(Length, big.mark = ','))
+  
+  
+})
+
+
+
+
+
+top_distances
+
+results_tables$top_distances_table = do.call(rbind, top_distances) %>% 
+  rownames_to_column(var = 'Trait') %>% 
+  mutate(Trait = gsub('\\.\\d$', '', Trait))
+
+
+
+
+
+
+
+```
+
+### Get total variance explained by significant QTL region
+```{r}
+
+total_var_explained = lapply(all_res, FUN = function(x){
+  
+  Results = x
+  
+  # LOD threshold calculated by permutation
+  lod_thresh = summary(Results[['perm']])[1]
+  
+  
+  
+  Markers = Results[["QTLs"]] %>%
+    as.data.frame() %>%
+    rownames_to_column(var = 'Marker') %>% 
+    mutate(name = Results[["name"]]) %>% 
+    filter(lod >= lod_thresh) %>% 
+    mutate(chr = factor(chr, levels = unique(chr)))
+  
+  Markers =  split(Markers, Markers$chr)
+  
+  
+  lapply(Markers, FUN = function(x){
+    
+    
+    # Creating the formula string
+    formula_obj = paste(Results$name, "~", paste(x[['Marker']], collapse = " + ")) %>% 
+      as.formula()
+    
+    # Fitting the model
+    lm_summary = lm(formula = formula_obj, data = Results$data) %>% 
+      summary()
+    
+    lm_summary
+    
+    sprintf("%.2f%%",lm_summary$adj.r.squared*100)
+    
+  })
+  
+  
+  
+})
+
+total_var_explained
+
+
+
+
+
+
+
+total_var_explained
+
+results_tables$total_var_explained_table = total_var_explained %>% 
+  unlist() %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = 'Trait_chr') %>% 
+  mutate(across(everything(), as.character)) %>% 
+  mutate(chr = str_match(Trait_chr, '\\.(.D)')[,2],
+         Trait = str_match(Trait_chr, '(.*?)\\.')[,2]
+         
+  ) %>% 
+  select(!Trait_chr) %>%
+  distinct() %>% 
+  rename(n = '.') %>% 
+  select(Trait,
+         chr,
+         n) %>% 
+  rename(`Percent Variance Explained` = n)
+
+```
+
+### Get total variance explained by significant top three markers
+```{r}
+
+top_var_explained = sapply(all_res, FUN = function(x){
+
+  res = list()
+  # LOD threshold calculated by permutation
+  lod_thresh = summary(x[['perm']])[1]
+  
+  
+  
+  top = x[["QTLs"]] %>%
+  as.data.frame() %>%
+  rownames_to_column(var = 'Marker') %>% 
+  slice_max(order_by = lod, n = 1) %>% 
+  pull(Marker) %>% 
+  unique()
+  
+  res$top = top
+  
+  # Creating the formula string
+formula_str <- paste(x$name, "~", paste(top, collapse = " + "))
+
+# Converting to a formula object
+formula_obj <- as.formula(formula_str)
+
+# Fitting the model
+lm_model <- lm(formula = formula_obj, data = x$data)
+
+
+
+lm_summary = summary(lm_model)
+
+lm_summary
+
+res$adj.r.squared = sprintf("%.2f%%",lm_summary$adj.r.squared*100)
+
+res
+  
+})
+
+
+
+
+
+
+
+results_tables$top_var_explained_table = top_var_explained %>% 
+  as.matrix() %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  mutate(Marker = top,
+         chr = str_extract(Marker, '\\dD'),
+         adj.r.squared = unlist(adj.r.squared)) %>% 
+  select(!top) %>% 
+  rownames_to_column(var = 'Trait') %>% 
+  unnest_longer(Marker)
+         
+```
+
+```{r}
+results_tables$Gen_Stats_Table = results_tables$n_Markers_table %>% 
+  left_join(results_tables$sig_distances_table) %>% 
+  left_join(results_tables$total_var_explained_table) %>% 
+  rename(Chromosome = chr)
+
+fwrite(results_tables$Gen_Stats_Table,
+       'Results/Gen_Stats_Table_JmJr_31.09.csv')
+
+results_tables$Top_Stats_Table = results_tables$top_distances_table %>% 
+  left_join(results_tables$top_var_explained_table)
+
+fwrite(results_tables$Top_Stats_Table,
+       'Results/Top_Stats_Table_JmJr_31.09.csv')
+
+```
+
+
+### Prediction Performances
+```{r}
+`RF RFE Perf` = sapply(all_res, FUN = function(x){
+  sapply(x$RFE_RF$performance, function(x){
+    x[[1]][["estimate"]] %>% round(digits = 2)
+  }) 
+})  %>% 
+  data.frame() %>% 
+  pivot_longer(everything(),
+               names_to = 'Trait',
+               values_to = 'Cor')
+
+`RF RFE P.val` = sapply(all_res, FUN = function(x){
+  sapply(x$RFE_RF$performance, function(x){
+    x[[1]][["p.value"]] %>% 
+      formatC(format = 'e', digits = 2) %>% 
+      as.numeric()
+  }) 
+}) %>%
+  data.frame() %>% 
+  pivot_longer(everything(),
+               names_to = 'Trait',
+               values_to = 'P.value') %>% 
+  select(!Trait)
+
+`rrBLUP Perf` = sapply(all_res, FUN = function(x){
+  sapply(x$rrBLUP$performance, function(x){
+     x[[1]][["estimate"]] %>% round(digits = 2)
+  }) 
+}) %>% 
+  data.frame() %>% 
+  pivot_longer(everything(),
+               names_to = 'Trait',
+               values_to = 'Cor')
+
+`rrBLUP P.val` = sapply(all_res, FUN = function(x){
+  sapply(x$rrBLUP$performance, function(x){
+    x[[1]][["p.value"]] %>% 
+      formatC(format = 'e', digits = 2) %>% 
+      as.numeric()
+  }) 
+}) %>% 
+  data.frame() %>% 
+  pivot_longer(everything(),
+               names_to = 'Trait',
+               values_to = 'P.value') %>% 
+  select(!Trait)
+
+RFE = cbind(`RF RFE Perf`,
+            `RF RFE P.val`) %>% 
+  mutate(Method = 'RF RFE')
+
+rrBLUP = cbind(`rrBLUP Perf`,
+               `rrBLUP P.val`)%>% 
+  mutate(Method = 'rrBLUP')
+
+
+pred_perf_5 = rbind(RFE, rrBLUP)
+
+```
+
+## Selection performance
+```{r}
+`RF RFE Selection` = sapply(all_res, FUN = function(x){
+  sapply(x$RFE_RF$performance, function(x){
+    x[[4]][["estimate"]] %>% round(digits = 2)
+  }) 
+})  %>% 
+  data.frame() %>%
+  mutate(Stat = rep(c('Mean of x', 'Mean of y'), 15),
+         Replicate = rep(1:15, each = 2),
+         across(starts_with('RLN'), ~ 10^(.x)-1)) %>% 
+  pivot_longer(!c(Stat, Replicate),
+               names_to = 'Trait',
+               values_to = 'Estimate') 
+
+`RF RFE Selection P-val` = sapply(all_res, FUN = function(x){
+  sapply(x$RFE_RF$performance, function(x){
+    x[[4]][["p.value"]] 
+      # formatC(format = 'e', digits = 2) %>% 
+      # as.numeric()
+  }) 
+}) %>%
+  data.frame() %>% 
+  mutate(Replicate = seq(1:15)) %>% 
+  pivot_longer(!Replicate,
+               names_to = 'Trait',
+               values_to = 'P.value') 
+  # select(!Trait)
+
+`rrBLUP Selection` = sapply(all_res, FUN = function(x){
+  sapply(x$rrBLUP$performance, function(x){
+     x[[4]][["estimate"]] %>% round(digits = 2)
+  }) 
+}) %>% 
+  data.frame() %>% 
+  mutate(Stat = rep(c('Mean of x', 'Mean of y'), 15),
+         Replicate = rep(1:15, each = 2),
+         across(starts_with('RLN'), ~ 10^(.x)-1)) %>% 
+  pivot_longer(!c(Stat, Replicate),
+               names_to = 'Trait',
+               values_to = 'Estimate') 
+
+`rrBLUP Selection P-val` = sapply(all_res, FUN = function(x){
+  sapply(x$rrBLUP$performance, function(x){
+    x[[4]][["p.value"]]
+  }) 
+}) %>% 
+  data.frame() %>% 
+  mutate(Replicate = seq(1:15)) %>% 
+  pivot_longer(!Replicate,
+               names_to = 'Trait',
+               values_to = 'P.value') 
+  # select(!Trait)
+
+RFE = `RF RFE Selection` %>% 
+  left_join(`RF RFE Selection P-val`,
+            by = c('Replicate', 'Trait')) %>% 
+  mutate(Method = 'RF RFE')
+
+rrBLUP = `rrBLUP Selection` %>% 
+  left_join(`rrBLUP Selection P-val`,
+            by = c('Replicate', 'Trait')) %>% 
+  mutate(Method = 'rrBLUP')
+
+
+
+pred_perf_Selection = rbind(RFE, rrBLUP)
+```
+
+## Saving prediction/Selection performances
+```{r}
+# options('openxlsx.numFmt' = NULL)
+
+# pred_perf_wb = createWorkbook()
+# 
+# addWorksheet(pred_perf_wb, 'Prediction Performances')
+# 
+# writeData(pred_perf_wb,
+#           1,
+#           x = pred_perf_5,
+#           withFilter = T)
+# 
+# addWorksheet(pred_perf_wb, 'Selection Performances')
+# 
+# writeData(pred_perf_wb,
+#           2,
+#           x = pred_perf_Selection,
+#           withFilter = T)
+
+Model_performances = list('Prediction Performance' = pred_perf_5,
+                          'Selection Performance' = pred_perf_Selection)
+
+hs <- createStyle(halign = "center", 
+                  valign = "center", 
+                  textDecoration = "Bold",
+                  border = "Bottom")
+
+# saveWorkbook(pred_perf_wb,
+#        'prediction_selection_performances_31.01.xlsx',
+#        borders = 'rows',
+#        headerStyle = hs,
+#        overwrite = T)
+
+write.xlsx(Model_performances,
+           file = 'Results/prediction_selection_performances_Jm_Jr_31.09.xlsx',
+           borders = 'rows',
+           headerStyle = hs,
+           style = createStyle(numFmt = '0.00')
+           )
+
+
+```
+
+
+
+# Saving top markers used for modeling
+
+### RF RFE Top markers
+```{r}
+# Create workbook
+top_markers_RFE_RF_wb = createWorkbook()
+
+# Make vector of names of traits
+names = names(all_res)
+
+rownames = dimnames(all_res$RLN_2Y[["rrBLUP"]][["markers"]][[1]])[[1]]
+
+# Apply this function over results
+sapply(all_res, FUN = function(x){
+  # Make sheet name variable
+  sheet = paste('Top Markers', x$name)
+  
+  print(sheet)
+  # Add sheet corresponding to analysis name 
+  addWorksheet(top_markers_RFE_RF_wb, sheetName = sheet)
+  
+  df = Reduce(bind_cols, x[["rrBLUP"]][["markers"]]) %>% 
+    as.data.frame()
+  
+  rownames(df) = rownames
+  
+  df = df %>% 
+    rownames_to_column(var = 'Marker') %>% 
+    mutate(Chromosome = str_extract(Marker, '\\dS(?=_\\d)|\\dD(?=_\\d)'),
+           Position = gsub('X31\\.0._J.\\d._', '', Marker) %>%
+             as.numeric(.)) %>% 
+    relocate(Chromosome, Position,
+             .after = Marker) %>% 
+    arrange(`...1`) %>% 
+    rename_with(~ gsub('\\.\\.\\.', 'Replicate_', .x))
+  
+  # Make data.frame of top markers
+  markers = data.frame(Marker = x[["RFE_RF"]][["rfe"]][["variables"]][["var"]][1:8]) %>% 
+            mutate(Chromosome = str_extract(Marker, '\\dS(?=_\\d)|\\dD(?=_\\d)'),
+            Position = gsub('X31\\.0._J.\\d._', '', Marker) %>% 
+              as.numeric(.)) %>% 
+    left_join(df,
+              by = 'Marker')
+            # arrange(Chromosome, Position)
+             
+  
+  print(markers)
+  # Write data to workbook
+  writeData(top_markers_RFE_RF_wb,
+            markers,
+            sheet = sheet,
+            withFilter = T)
+  
+})
+
+all_markers = lapply(all_res, function(x){
+  x[["RFE_RF"]][["rfe"]][["variables"]][["var"]][1:8]
+})
+
+common = c('Marker', Reduce(intersect, all_markers))
+
+addWorksheet(top_markers_RFE_RF_wb, sheetName = "Common Markers")
+
+writeData(top_markers_RFE_RF_wb,
+          common,
+          sheet = "Common Markers",
+          withFilter = T)
+
+# Save the workbook
+saveWorkbook(top_markers_RFE_RF_wb,
+       'Results/Top_markers_RFE_RF_Jm_Jr_31.09.xlsx',
+       overwrite = T)
+```
+
+
+### rrBLUP Top markers
+```{r}
+# Create workbook
+top_markers_rrBLUP_wb = createWorkbook()
+
+# Make vector of names of traits
+names = names(all_res)
+
+rownames = dimnames(all_res$RLN_2Y[["rrBLUP"]][["markers"]][[1]])[[1]]
+
+# Apply this function over results
+lapply(all_res, FUN = function(x){
+  # Make sheet name variable
+  sheet = paste('Top Markers', x$name)
+  
+  print(sheet)
+  # Add sheet corresponding to analysis name 
+  addWorksheet(top_markers_rrBLUP_wb, sheetName = sheet)
+  # Make data.frame of top markers
+  df = Reduce(bind_cols, x[["rrBLUP"]][["markers"]]) %>% 
+    as.data.frame()
+  
+  rownames(df) = rownames
+  
+  df = df %>% 
+    rownames_to_column(var = 'Marker') %>% 
+    mutate(Chromosome = str_extract(Marker, '\\dS(?=_\\d)|\\dD(?=_\\d)'),
+           Position = gsub('X31\\.0._J.\\d._', '', Marker) %>%
+             as.numeric(.)) %>% 
+    relocate(Chromosome, Position,
+             .after = Marker) %>% 
+    arrange(`...1`) %>% 
+    rename_with(~ gsub('\\.\\.\\.', 'Replicate_', .x))
+
+  writeData(top_markers_rrBLUP_wb,
+            df,
+            sheet = sheet,
+            withFilter = T)
+  
+})
+
+saveWorkbook(top_markers_rrBLUP_wb,
+       'Results/Top_markers_rrBLUP_Jm_Jr_31.09.xlsx',
+       overwrite = T)
+```
+
+### r/QTL Top markers
+```{r}
+# Create workbook
+top_markers_QTls_wb = createWorkbook()
+
+# Make vector of names of traits
+names = names(all_res)
+
+rownames = dimnames(all_res$RLN_2Y[["rrBLUP"]][["markers"]][[1]])[[1]]
+
+# Apply this function over results
+sapply(all_res, FUN = function(x){
+  # Make sheet name variable
+  sheet = paste('Top Markers', x$name)
+  
+  print(sheet)
+  # Add sheet corresponding to analysis name 
+  addWorksheet(top_markers_QTls_wb, sheetName = sheet)
+  
+  df = Reduce(bind_cols, x[["rrBLUP"]][["markers"]]) %>% 
+    as.data.frame()
+  
+  rownames(df) = rownames
+  
+  df = df %>% 
+    rownames_to_column(var = 'Marker') %>% 
+    mutate(Chromosome = str_extract(Marker, '\\dS(?=_\\d)|\\dD(?=_\\d)'),
+           Position = gsub('X31\\.0._J.\\d._', '', Marker) %>%
+             as.numeric(.)) %>% 
+    relocate(Chromosome, Position,
+             .after = Marker) %>% 
+    arrange(`...1`) %>% 
+    rename_with(~ gsub('\\.\\.\\.', 'Replicate_', .x))
+
+  
+  # LOD threshold calculated by permutation
+  lod_thresh = summary(x[['perm']])[1]
+  
+  print(lod_thresh)
+  
+  # Make data.frame of top markers
+  markers = x[["QTLs"]] %>%
+    as.data.frame() %>%
+    rownames_to_column(var = 'Marker') %>%
+    mutate(Chromosome = str_extract(Marker, '\\dS(?=_\\d)|\\dD(?=_\\d)'),
+            Position = gsub('X31\\.0._J.\\d._', '', Marker) %>%
+              as.numeric(.)) %>%
+    filter(lod >= lod_thresh) %>%
+    arrange(desc(lod)) %>% 
+    left_join(df,
+              by = 'Marker')
+
+
+  print(markers)
+
+  writeData(top_markers_QTls_wb,
+            markers,
+            sheet = sheet,
+            withFilter = T)
+  
+})
+
+saveWorkbook(top_markers_QTls_wb,
+       'Results/Top_markers_RQTls_Jm_Jr_31.09.xlsx',
+       overwrite = T)
+
+```
+
+## Save manhattan plots to one figure
+```{r}
+manhattans = ggpubr::ggarrange(RLN_2Y$manhattan_plot,
+                              RLN_3Y$manhattan_plot,
+                              Height_2Y$manhattan_plot,
+                              Height_3Y$manhattan_plot,
+                              CG_Avg$manhattan_plot,
+                              PHY_Avg$manhattan_plot,
+                              labels = c('(A)',
+                                         '(B)',
+                                         '(C)', 
+                                         '(D)',
+                                         '(E)',
+                                         '(F)'),
+                              nrow = 3,
+                              ncol = 2)
+
+manhattans
+
+sjPlot::save_plot('Results/manhattan_plots_Jm_Jr_31.09.png',
+                  manhattans,
+                  width = 35,
+                  height = 30)
+```
+
+
