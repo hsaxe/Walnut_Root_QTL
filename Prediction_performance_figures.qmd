@@ -34,19 +34,19 @@ Perf$perf_01 = read.xlsx('Results/prediction_selection_performances_Jm_Jr_31.01.
 
 
 
-Perf$perf_09 = read.xlsx('Results/prediction_performances_Jm_Jr_31.09.xlsx',
+Perf$perf_09 = read.xlsx('Results/prediction_selection_performances_Jm_Jr_31.09.xlsx',
                     sheet = 1) %>% 
   mutate(`Female Parent` = '31.09') 
 ```
 
 ```{r}
 Perf$both = rbind(Perf$perf_01, Perf$perf_09) %>% 
-  mutate(Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i>',
-                           Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp.',
-                           Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i>',
-                           Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i>',
-                           Trait == 'Height_2Y' ~ 'Two-year Tree Height',
-                           Trait == 'Height_3Y' ~ 'Three-year Tree Height',
+  mutate(Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i><br>Disease Score',
+                           Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp.<br>Disease Score',
+                           Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i><br>Counts',
+                           Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i><br>Counts',
+                           Trait == 'Height_2Y' ~ 'Two-year Tree<br>Height',
+                           Trait == 'Height_3Y' ~ 'Three-year Tree<br>Height',
                            T ~ ''),
          `Method + Female Parent` = paste0(Method, ' ', `Female Parent`),
          `Trait + Method + Female Parent` = paste0(Trait, ' ', Method, ' ', `Female Parent`)
@@ -93,7 +93,7 @@ Perf$Summary = Perf$both %>%
 ```{r}
 Perf$table = kable(Perf$Stars2, 
       format = 'html',
-      align = 'l',
+      align = 'c',
       escape = F,
       digits = 3
       ) %>% 
@@ -102,7 +102,7 @@ Perf$table = kable(Perf$Stars2,
                                       "hover",
                                       "condensed",
                                       "responsive"),
-                full_width = T,
+                full_width = F,
                 font_size = 11) %>%
   row_spec(0, bold = TRUE, italic = F) 
 
@@ -115,7 +115,7 @@ save_kable(Perf$table, 'Results/Performance_table.html')
 webshot2::webshot(url = "Results/Performance_table.html", 
         file = "Results/Performance_table.png",
         zoom = 2,
-        cliprect = c(0, 5, 975, 125))
+        cliprect = c(80, 5, 770, 140))
 ```
 
 
@@ -151,9 +151,7 @@ Perf$p = ggplot(Perf$both, aes(Method, Cor,
     strip.text = element_markdown(face = "bold"),
     strip.text.y = element_text(angle = 0),
     panel.background = element_rect(color = NA, fill = "#F0F0F0"))+
-  # facet_wrap(~Trait,
-  #            ncol = 6,
-  #            scales = 'free_x')
+ylab(label = 'r')+
 facet_grid(`Female Parent`~Trait,
              # nrow = 6,
              axes = 'all',
@@ -212,12 +210,12 @@ Selection$Selection_09 = read.xlsx('Results/prediction_selection_performances_Jm
 # Data
 ```{r}
 Selection$both = rbind(Selection$Selection_01, Selection$Selection_09) %>%
-  mutate(Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i>',
-                           Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp.',
-                           Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i>',
-                           Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i>',
-                           Trait == 'Height_2Y' ~ 'Two-year Tree Height',
-                           Trait == 'Height_3Y' ~ 'Three-year Tree Height',
+  mutate(Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i><br>Disease Score',
+                           Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp.<br>Disease Score',
+                           Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i><br>Counts',
+                           Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i><br>Counts',
+                           Trait == 'Height_2Y' ~ 'Two-year Tree<br>Height',
+                           Trait == 'Height_3Y' ~ 'Three-year Tree<br>Height',
                            T ~ ''),
          Estimate = format(Estimate, digits = 3) %>% 
            as.numeric(.),
@@ -300,7 +298,7 @@ ggplot(Selection$both, aes(Trait, log2(P.value)*-1))+
 ```{r}
 Selection$table = kable(Selection$Stars2, 
       format = 'html',
-      align = 'l',
+      align = 'c',
       escape = F,
       digits = 3
       ) %>% 
@@ -309,7 +307,7 @@ Selection$table = kable(Selection$Stars2,
                                       "hover",
                                       "condensed",
                                       "responsive"),
-                full_width = T,
+                full_width = F,
                 font_size = 11) %>%
   row_spec(0, bold = TRUE, italic = F) 
 
@@ -322,7 +320,7 @@ save_kable(Selection$table, 'Results/Prediction_table.html')
 webshot2::webshot(url = "Results/Prediction_table.html", 
         file = "Results/Prediction_table.png",
         zoom = 2,
-        cliprect = c(0, 5, 990, 240))
+        cliprect = c(40, 5, 850, 250))
 ```
 
 
@@ -395,21 +393,22 @@ Stats_Tables_31.01$GST = read.csv('Results/Gen_Stats_Table_JmJr_31.01.csv',
 
 ```{r}
 Stats_Tables_31.01$GST1 = Stats_Tables_31.01$GST %>% 
-  mutate(Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i>',
-                           Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp.',
-                           Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i>',
-                           Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i>',
+  mutate(Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i> Disease Score',
+                           Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp. Disease Score',
+                           Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i> Counts',
+                           Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i> Counts',
                            Trait == 'Height_2Y' ~ 'Two-year Tree Height',
                            Trait == 'Height_3Y' ~ 'Three-year Tree Height',
                            T ~ '')) %>% 
-  rename_with(~ gsub('Distance', 'Length', .x))
+  rename_with(~ gsub('Distance', 'Length (bp)', .x) %>% 
+                gsub('Markers', 'Unique Markers', .))
 ```
 
 ## Gen stats table kable
 ```{r}
 Stats_Tables_31.01$GSTkable = kable(Stats_Tables_31.01$GST1, 
       format = 'html',
-      align = 'l',
+      align = 'c',
       escape = F,
       digits = 3
       ) %>% 
@@ -418,7 +417,7 @@ Stats_Tables_31.01$GSTkable = kable(Stats_Tables_31.01$GST1,
                                       "hover",
                                       "condensed",
                                       "responsive"),
-                full_width = T,
+                full_width = F,
                 font_size = 11) %>%
   row_spec(0, bold = TRUE, italic = F) 
 
@@ -431,7 +430,7 @@ save_kable(Stats_Tables_31.01$GSTkable, 'Results/Gen_Stats_table_JmJr_31.01.html
 webshot2::webshot(url = "Results/Gen_Stats_table_JmJr_31.01.html", 
         file = "Results/Gen_Stats_table_JmJr_31.01.png",
         zoom = 2,
-        cliprect = c(0, 5, 830, 260))
+        cliprect = c(165, 5, 600, 240))
 
 ```
 
@@ -446,35 +445,38 @@ Stats_Tables_31.01$TST = read.csv('Results/Top_Stats_Table_JmJr_31.01.csv',
 
 ```{r}
 Stats_Tables_31.01$TST1 = Stats_Tables_31.01$TST %>% 
-  mutate(Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i>',
-                           Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp.',
-                           Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i>',
-                           Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i>',
+  mutate(Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i> Disease Score',
+                           Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp. Disease Score',
+                           Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i> Counts',
+                           Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i> Counts',
                            Trait == 'Height_2Y' ~ 'Two-year Tree Height',
                            Trait == 'Height_3Y' ~ 'Three-year Tree Height',
                            T ~ ''),
          Marker = gsub('^X', '', Marker)) %>% 
   rename_with(~ gsub('chr', 'Chromosome', .x) %>% 
                 gsub('lod', 'LOD', .) %>% 
-                gsub('adj.r.squared', 'Percent Variance Explained', .))
+                gsub('adj.r.squared', 'Percent Variance Explained', .) %>% 
+                gsub('Marker', 'Marker(s)', .) %>% 
+                gsub('Length', 'Length (bp)', .))
 ```
 
-## Gen stats table kable
+## Top stats table kable
 ```{r}
 Stats_Tables_31.01$TSTkable = kable(Stats_Tables_31.01$TST1, 
       format = 'html',
-      align = 'l',
+      align = 'c',
       escape = F,
       digits = 3
       ) %>% 
-  # column_spec(1:length(colnames(Summary)), width = "1000em") %>% 
+  # column_spec(1:length(colnames(Stats_Tables_31.01$TST1)), width = '1em') %>%
   kable_styling(bootstrap_options = c("striped",
                                       "hover",
                                       "condensed",
                                       "responsive"),
-                full_width = T,
+                full_width = F,
                 font_size = 11) %>%
-  row_spec(0, bold = TRUE, italic = F) 
+  row_spec(0, bold = TRUE, italic = F)
+
 
 
 Stats_Tables_31.01$TSTkable
@@ -485,7 +487,7 @@ save_kable(Stats_Tables_31.01$TSTkable, 'Results/Top_Stats_table_JmJr_31.01.html
 webshot2::webshot(url = "Results/Top_Stats_table_JmJr_31.01.html", 
         file = "Results/Top_Stats_table_JmJr_31.01.png",
         zoom = 2,
-        cliprect = c(0, 5, 890, 290))
+        cliprect = c(135, 5, 660, 290))
 
 ```
 
@@ -502,22 +504,23 @@ Stats_Tables_31.09$GST = read.csv('Results/Gen_Stats_Table_JmJr_31.09.csv',
 
 ```{r}
 Stats_Tables_31.09$GST1 = Stats_Tables_31.09$GST %>% 
-  mutate(Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i>',
-                           Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp.',
-                           Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i>',
-                           Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i>',
+  mutate(Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i> Disease Score',
+                           Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp. Disease Score',
+                           Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i> Counts',
+                           Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i> Counts',
                            Trait == 'Height_2Y' ~ 'Two-year Tree Height',
                            Trait == 'Height_3Y' ~ 'Three-year Tree Height',
                            T ~ ''),
          Distance = ifelse(is.na(Distance), 0, Distance)) %>% 
-  rename_with(~ gsub('Distance', 'Length', .x))
+  rename_with(~ gsub('Distance', 'Length', .x) %>% 
+                gsub('Markers', 'Unique Markers', .))
 ```
 
 ## Gen stats table kable
 ```{r}
 Stats_Tables_31.09$GSTkable = kable(Stats_Tables_31.09$GST1, 
       format = 'html',
-      align = 'l',
+      align = 'c',
       escape = F,
       digits = 3
       ) %>% 
@@ -526,7 +529,7 @@ Stats_Tables_31.09$GSTkable = kable(Stats_Tables_31.09$GST1,
                                       "hover",
                                       "condensed",
                                       "responsive"),
-                full_width = T,
+                full_width = F,
                 font_size = 11) %>%
   row_spec(0, bold = TRUE, italic = F) 
 
@@ -539,7 +542,7 @@ save_kable(Stats_Tables_31.09$GSTkable, 'Results/Gen_Stats_table_JmJr_31.09.html
 webshot2::webshot(url = "Results/Gen_Stats_table_JmJr_31.09.html", 
         file = "Results/Gen_Stats_table_JmJr_31.09.png",
         zoom = 2,
-        cliprect = c(0, 5, 830, 260))
+        cliprect = c(165, 5, 600, 260))
 
 ```
 
@@ -554,24 +557,26 @@ Stats_Tables_31.09$TST = read.csv('Results/Top_Stats_Table_JmJr_31.09.csv',
 
 ```{r}
 Stats_Tables_31.09$TST1 = Stats_Tables_31.09$TST %>% 
-  mutate(Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i>',
-                           Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp.',
-                           Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i>',
-                           Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i>',
+  mutate(Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i> Disease Score',
+                           Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp. Disease Score',
+                           Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i> Counts',
+                           Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i> Counts',
                            Trait == 'Height_2Y' ~ 'Two-year Tree Height',
                            Trait == 'Height_3Y' ~ 'Three-year Tree Height',
                            T ~ ''),
          Marker = gsub('^X', '', Marker)) %>% 
   rename_with(~ gsub('chr', 'Chromosome', .x) %>% 
                 gsub('lod', 'LOD', .) %>% 
-                gsub('adj.r.squared', 'Percent Variance Explained', .))
+                gsub('adj.r.squared', 'Percent Variance Explained', .) %>% 
+                gsub('Marker', 'Marker(s)', .) %>% 
+                gsub('Length', 'Length (bp)', .))
 ```
 
-## Gen stats table kable
+## Top stats table kable
 ```{r}
 Stats_Tables_31.09$TSTkable = kable(Stats_Tables_31.09$TST1, 
       format = 'html',
-      align = 'l',
+      align = 'c',
       escape = F,
       digits = 3
       ) %>% 
@@ -580,7 +585,7 @@ Stats_Tables_31.09$TSTkable = kable(Stats_Tables_31.09$TST1,
                                       "hover",
                                       "condensed",
                                       "responsive"),
-                full_width = T,
+                full_width = F,
                 font_size = 11) %>%
   row_spec(0, bold = TRUE, italic = F) 
 
@@ -593,7 +598,14 @@ save_kable(Stats_Tables_31.09$TSTkable, 'Results/Top_Stats_table_JmJr_31.09.html
 webshot2::webshot(url = "Results/Top_Stats_table_JmJr_31.09.html", 
         file = "Results/Top_Stats_table_JmJr_31.09.png",
         zoom = 2,
-        cliprect = c(0, 5, 890, 260))
+        cliprect = c(135, 5, 660, 260))
 
 ```
+
+# Convert this to .R for (hopefully) faster execution
+```{r}
+knitr::purl('Prediction_performance_figures.qmd', 
+            output = 'Prediction_performance_figures.R')
+```
+
 

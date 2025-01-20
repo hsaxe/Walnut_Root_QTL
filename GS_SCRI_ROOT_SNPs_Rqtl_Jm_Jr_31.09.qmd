@@ -136,7 +136,76 @@ ggplot(RLN_2Y$data, aes(RLN_2Y))+
 
 ### Function for repeating data split and model performance validation
 ```{r}
-RF_reps = function(times = 5, data, pheno, desc = F, rfe_res){
+# RF_reps = function(times = 5, data, pheno, desc = F, rfe_res){
+#   
+#   results = list()
+#   
+#   for(i in 1:times){
+#     
+#     set.seed(i)
+#     
+#     rows = createDataPartition(data[[pheno]], 
+#                              times = 1, 
+#                              p = 0.7, 
+#                              list = F)
+#   
+#   train = data[rows,]
+#   
+#   test = data[-rows,]
+#   
+#   mod = caret::train(as.formula(paste(pheno ,
+#                                       paste(rfe_res[["RFE_RF"]][["rfe"]][["variables"]][["var"]]
+#                                             [1:8], collapse = ' + '),
+#                                       sep = ' ~ ')),
+#                      data = train,
+#                      method = 'rf')
+#   
+#   # Make predictions using the model
+#   p = predict.train(mod, test)
+#   
+#   dat = data.frame(predicted = p,
+#                    actual = test[[pheno]])
+#   # Select top or bottom 25% by predicted column for selection performance
+#   if(desc == F){
+#      selection = dat %>% 
+#     arrange(predicted) %>% 
+#     slice(1:round(nrow(.)*0.25,
+#                 digits = 0))
+#   }else{
+#      selection = dat %>% 
+#     arrange(desc(predicted)) %>% 
+#     slice(1:round(nrow(.)*0.25,
+#                 digits = 0))
+#   }
+#  
+#   # Compare actual data selected by predictions vs unselected actual data
+#   if(desc == F){
+#     test_res = t.test(selection$actual, dat$actual,
+#                       alternative = 'less')
+#   }else{
+#       test_res = t.test(selection$actual, dat$actual,
+#                       alternative = 'greater')
+#   }
+#   
+#   # Store dat in the results list
+#   results[[i]] = list(cor.test(dat$predicted, 
+#                                dat$actual,
+#                                method = 'pearson',
+#                                alternative = 'greater'),
+#                       dat,
+#                       selection,
+#                       test_res)
+#     
+#   }
+#   
+#   return(results)
+#   
+# }
+```
+
+### Modified function for Pat's suggestion
+```{r}
+RF_reps = function(times = 5, data, pheno, desc = F){
   
   results = list()
   
@@ -153,9 +222,24 @@ RF_reps = function(times = 5, data, pheno, desc = F, rfe_res){
   
   test = data[-rows,]
   
-  mod = caret::train(as.formula(paste(pheno ,
-                                      paste(rfe_res[["RFE_RF"]][["rfe"]][["variables"]][["var"]]
-                                            [1:8], collapse = ' + '),
+  # Train random forest model on full dataset
+rf_model <- randomForest(as.formula(paste0(pheno, ' ~ ', '.')), 
+                         data = train,
+                         importance = TRUE)
+
+
+# Get importance scores (Mean Decrease in Impurity)
+top_vars <- importance(rf_model, type = 1) %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = 'Marker') %>% 
+  arrange(desc(`%IncMSE`)) %>% 
+  slice_head(n = 8) %>% 
+  pull(Marker)# type = 1 for MDI
+  
+  # Independently test top 8 features by training a model using them
+  mod = caret::train(as.formula(paste(pheno,
+                                      paste(top_vars,
+                                            collapse = ' + '),
                                       sep = ' ~ ')),
                      data = train,
                      method = 'rf')
@@ -165,6 +249,7 @@ RF_reps = function(times = 5, data, pheno, desc = F, rfe_res){
   
   dat = data.frame(predicted = p,
                    actual = test[[pheno]])
+  
   # Select top or bottom 25% by predicted column for selection performance
   if(desc == F){
      selection = dat %>% 
@@ -186,15 +271,17 @@ RF_reps = function(times = 5, data, pheno, desc = F, rfe_res){
       test_res = t.test(selection$actual, dat$actual,
                       alternative = 'greater')
   }
+
   
   # Store dat in the results list
   results[[i]] = list(cor.test(dat$predicted, 
-                               dat$actual,
-                               method = 'pearson',
+                                dat$actual,
+                                method = 'pearson',
                                alternative = 'greater'),
                       dat,
                       selection,
-                      test_res)
+                      test_res,
+                      top_vars)
     
   }
   
@@ -207,9 +294,9 @@ RF_reps = function(times = 5, data, pheno, desc = F, rfe_res){
 ```{r}
 RLN_2Y$RFE_RF$performance = RF_reps(times = 15, 
                                     desc = F,
-                                    data = RLN_2Y$data,
-                                    pheno = 'RLN_2Y', 
-                                    rfe_res = RLN_2Y)
+                                    data = RLN_2Y$data %>% 
+                                      select(!Hybrid),
+                                    pheno = 'RLN_2Y')
 
 # RLN_2Y$RFE_RF$performance
 
@@ -284,6 +371,8 @@ RLN_2Y$perm = scanone(RLN_2Y$cross,
 
 
 summary(RLN_2Y$perm)
+
+summary(RLN_2Y$perm)[1]
 
 summary(RLN_2Y$QTLs, 
         perms = RLN_2Y$perm,
@@ -548,9 +637,9 @@ ggplot(RLN_3Y$data, aes(RLN_3Y))+
 
 RLN_3Y$RFE_RF$performance = RF_reps(times = 15, 
                                     desc = F,
-                                    data = RLN_3Y$data, 
-                                    pheno = 'RLN_3Y', 
-                                    rfe_res = RLN_3Y)
+                                    data = RLN_3Y$data %>% 
+                                      select(!Hybrid), 
+                                    pheno = 'RLN_3Y')
 ```
 
 ### Manhattan plot
@@ -779,8 +868,8 @@ ctrl <- rfeControl(functions = rfFuncs,
                    number = 10,
                    verbose = FALSE)
 
-rfe_res_all$Height_2Y = rfe(Height_2Y ~ ., rfedat, rfeControl = ctrl,
-                            cores = 8)
+# rfe_res_all$Height_2Y = rfe(Height_2Y ~ ., rfedat, rfeControl = ctrl,
+#                             cores = 8)
 
 
 Height_2Y$RFE_RF$rfe = rfe_res_all$Height_2Y
@@ -801,9 +890,9 @@ ggplot(Height_2Y$data, aes(Height_2Y))+
 
 Height_2Y$RFE_RF$performance = RF_reps(times = 15, 
                                        desc = T,
-                                       data = Height_2Y$data, 
-                                       pheno = 'Height_2Y', 
-                                       rfe_res = Height_2Y)
+                                       data = Height_2Y$data %>% 
+                                      select(!Hybrid), 
+                                       pheno = 'Height_2Y')
 ```
 
 ### Manhattan plot
@@ -1054,9 +1143,9 @@ ggplot(Height_3Y$data, aes(Height_3Y))+
 
 Height_3Y$RFE_RF$performance = RF_reps(times = 15, 
                                        desc = T,
-                                       data = Height_3Y$data, 
-                                       pheno = 'Height_3Y', 
-                                       rfe_res = Height_3Y)
+                                       data = Height_3Y$data %>% 
+                                      select(!Hybrid), 
+                                       pheno = 'Height_3Y')
 ```
 
 ### Manhattan plot
@@ -1314,9 +1403,9 @@ ggplot(CG_Avg$data, aes(CG_Avg))+
 
 CG_Avg$RFE_RF$performance = RF_reps(times = 15, 
                                     desc = F,
-                                    data = CG_Avg$data, 
-                                    pheno = 'CG_Avg', 
-                                    rfe_res = CG_Avg)
+                                    data = CG_Avg$data %>% 
+                                      select(!Hybrid), 
+                                    pheno = 'CG_Avg')
 ```
 
 ### Manhattan plot
@@ -1575,9 +1664,9 @@ ggplot(PHY_Avg$data, aes(PHY_Avg))+
 
 PHY_Avg$RFE_RF$performance = RF_reps(times = 15, 
                                      desc = F,
-                                     data = PHY_Avg$data, 
-                                     pheno = 'PHY_Avg', 
-                                     rfe_res = PHY_Avg)
+                                     data = PHY_Avg$data %>% 
+                                      select(!Hybrid), 
+                                     pheno = 'PHY_Avg')
 ```
 
 ### Manhattan plot
@@ -1837,12 +1926,12 @@ all_res = list(RLN_2Y = RLN_2Y,
 
 names(all_res)
 
-# saveRDS(all_res, 'All_Traits_QTL_Selection_Results_Jm_Jr_31.09.RData')
+# saveRDS(all_res, 'All_Traits_QTL_Selection_Results_Jm_Jr_31.09_no_RFE.RData')
 
 ```
 
 ```{r}
-all_res = readRDS('All_Traits_QTL_Selection_Results_Jm_Jr_31.09.RData')
+all_res = readRDS('All_Traits_QTL_Selection_Results_Jm_Jr_31.09_no_RFE.RData')
 
 results_tables = list()
 ```
@@ -1850,7 +1939,7 @@ results_tables = list()
 
 ### LOD significance thresholds
 ```{r}
-thresholds = lapply(all_res, FUN = function(x){summary(x$perm)[1] %>% round(digits = 2)})
+thresholds = lapply(all_res, FUN = function(x){summary(x$perm)[1] %>% sprintf('%.1f', .)})
 
 thresholds
 
@@ -1881,10 +1970,6 @@ n_Markers = lapply(all_res, FUN = function(x){
     
   })
 
-
-
-
-
 results_tables$n_Markers_table = n_Markers %>% 
   as.data.frame() %>% 
   mutate(across(everything(), as.character)) %>% 
@@ -1903,6 +1988,7 @@ results_tables$n_Markers_table = n_Markers %>%
   unnest_longer(c(chr, n)) %>% 
   rename(Markers = n)
 
+results_tables$n_Markers_table
 ```
 
 
@@ -1912,8 +1998,6 @@ sig_distances = lapply(all_res, FUN = function(x){
   
   # LOD threshold calculated by permutation
   lod_thresh = summary(x[['perm']])[1]
-  
-  
   
   x[["QTLs"]] %>%
     as.data.frame() %>%
@@ -1930,17 +2014,8 @@ sig_distances = lapply(all_res, FUN = function(x){
            chr) %>% 
     distinct() %>% 
     as.list()
-    
-    
-  
   
 })
-
-
-
-
-
-sig_distances
 
 results_tables$sig_distances_table = sig_distances %>% 
   as.data.frame() %>% 
@@ -1962,6 +2037,8 @@ results_tables$sig_distances_table = sig_distances %>%
          chr,
          n) %>% 
   rename(Distance = n)
+
+results_tables$sig_distances_table
 
 ```
 
@@ -1992,7 +2069,7 @@ results_tables$top_three = plyr::ldply(top_three) %>%
   rownames_to_column(var = 'Marker') %>% 
   dplyr::rename(Trait = V1)
 
-top_three
+results_tables$top_three
 ```
 
 ### Length of Top three markers QTLs
@@ -2017,27 +2094,17 @@ top_distances = lapply(all_res, FUN = function(x){
               perc_var_explained,
               Position)) %>% 
     unique() %>% 
-    mutate(Length = format(Length, big.mark = ','))
+    mutate(Length = format(Length, big.mark = ','),
+           lod = sprintf('%.1f', lod))
   
   
 })
-
-
-
-
-
-top_distances
 
 results_tables$top_distances_table = do.call(rbind, top_distances) %>% 
   rownames_to_column(var = 'Trait') %>% 
   mutate(Trait = gsub('\\.\\d$', '', Trait))
 
-
-
-
-
-
-
+results_tables$top_distances_table
 ```
 
 ### Get total variance explained by significant QTL region
@@ -2075,23 +2142,12 @@ total_var_explained = lapply(all_res, FUN = function(x){
     
     lm_summary
     
-    sprintf("%.2f%%",lm_summary$adj.r.squared*100)
-    
+    sprintf("%.1f%%", lm_summary$adj.r.squared*100)
   })
   
   
   
 })
-
-total_var_explained
-
-
-
-
-
-
-
-total_var_explained
 
 results_tables$total_var_explained_table = total_var_explained %>% 
   unlist() %>% 
@@ -2110,6 +2166,7 @@ results_tables$total_var_explained_table = total_var_explained %>%
          n) %>% 
   rename(`Percent Variance Explained` = n)
 
+results_tables$total_var_explained_table
 ```
 
 ### Get total variance explained by significant top three markers
@@ -2147,17 +2204,11 @@ lm_summary = summary(lm_model)
 
 lm_summary
 
-res$adj.r.squared = sprintf("%.2f%%",lm_summary$adj.r.squared*100)
+res$adj.r.squared = sprintf("%.1f%%", lm_summary$adj.r.squared*100)
 
 res
   
 })
-
-
-
-
-
-
 
 results_tables$top_var_explained_table = top_var_explained %>% 
   as.matrix() %>% 
@@ -2170,6 +2221,7 @@ results_tables$top_var_explained_table = top_var_explained %>%
   rownames_to_column(var = 'Trait') %>% 
   unnest_longer(Marker)
          
+results_tables$top_var_explained_table 
 ```
 
 ```{r}
@@ -2240,7 +2292,7 @@ fwrite(results_tables$Top_Stats_Table,
 
 RFE = cbind(`RF RFE Perf`,
             `RF RFE P.val`) %>% 
-  mutate(Method = 'RF RFE')
+  mutate(Method = 'RF')
 
 rrBLUP = cbind(`rrBLUP Perf`,
                `rrBLUP P.val`)%>% 
@@ -2249,6 +2301,64 @@ rrBLUP = cbind(`rrBLUP Perf`,
 
 pred_perf_5 = rbind(RFE, rrBLUP)
 
+```
+
+# SNP boxplots
+```{r, fig.height=12, fig.width=4}
+top_boxplot_dat = lapply(all_res, FUN = function(x){
+  
+name = print(x$name)  
+  
+top = x$RFE_RF$rfe$variables$var[1:4]
+
+boxplot_dat = x$data %>% 
+  pivot_longer(!c(Hybrid,
+                  name),
+               names_to = 'Marker',
+               values_to = 'Genotype') %>% 
+  mutate(Genotype = sprintf('%.2f', Genotype) %>% 
+           as.factor()) %>% 
+  filter(Marker %in% top) %>% 
+  pivot_longer(name,
+               names_to = 'Trait',
+               values_to = 'Trait Value')
+})
+
+top_boxplot_dat = do.call(rbind, top_boxplot_dat) %>%
+  as_tibble() %>% 
+  mutate(Marker = gsub('X31.09_', '', Marker),
+         Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i><br>Disease Score',
+                           Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp.<br>Disease Score',
+                           Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i><br>Counts',
+                           Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i><br>Counts',
+                           Trait == 'Height_2Y' ~ 'Two-year Tree<br>Height',
+                           Trait == 'Height_3Y' ~ 'Three-year Tree<br>Height',
+                           T ~ ''))
+  
+```
+
+### Make plot
+```{r, fig.height=10, fig.width=8}
+SNPs_plot = ggplot(top_boxplot_dat,
+       aes(Genotype, `Trait Value`))+
+  geom_boxplot()+
+  ggtitle(label = 'Top Markers 31.09 x Serr\nTrait on y-axis and Genotype on x-axis')+
+  theme(strip.text = element_markdown(face = 'bold'),
+        plot.title = element_text(hjust = 0.5,
+                                  face = 'bold'))+
+  facet_wrap(Trait~Marker,
+             scales = 'free',
+             ncol = 4)
+
+SNPs_plot
+```
+
+### Save plot
+```{r}
+save_plot(fig = SNPs_plot,
+          filename = 'Results/SNPs_boxplot_31.09.png',
+          width = 20,
+          height = 25)
 ```
 
 ## Selection performance
@@ -2308,7 +2418,7 @@ pred_perf_5 = rbind(RFE, rrBLUP)
 RFE = `RF RFE Selection` %>% 
   left_join(`RF RFE Selection P-val`,
             by = c('Replicate', 'Trait')) %>% 
-  mutate(Method = 'RF RFE')
+  mutate(Method = 'RF')
 
 rrBLUP = `rrBLUP Selection` %>% 
   left_join(`rrBLUP Selection P-val`,
@@ -2322,24 +2432,6 @@ pred_perf_Selection = rbind(RFE, rrBLUP)
 
 ## Saving prediction/Selection performances
 ```{r}
-# options('openxlsx.numFmt' = NULL)
-
-# pred_perf_wb = createWorkbook()
-# 
-# addWorksheet(pred_perf_wb, 'Prediction Performances')
-# 
-# writeData(pred_perf_wb,
-#           1,
-#           x = pred_perf_5,
-#           withFilter = T)
-# 
-# addWorksheet(pred_perf_wb, 'Selection Performances')
-# 
-# writeData(pred_perf_wb,
-#           2,
-#           x = pred_perf_Selection,
-#           withFilter = T)
-
 Model_performances = list('Prediction Performance' = pred_perf_5,
                           'Selection Performance' = pred_perf_Selection)
 
@@ -2348,20 +2440,12 @@ hs <- createStyle(halign = "center",
                   textDecoration = "Bold",
                   border = "Bottom")
 
-# saveWorkbook(pred_perf_wb,
-#        'prediction_selection_performances_31.01.xlsx',
-#        borders = 'rows',
-#        headerStyle = hs,
-#        overwrite = T)
-
 write.xlsx(Model_performances,
            file = 'Results/prediction_selection_performances_Jm_Jr_31.09.xlsx',
            borders = 'rows',
            headerStyle = hs,
            style = createStyle(numFmt = '0.00')
            )
-
-
 ```
 
 
@@ -2434,6 +2518,14 @@ writeData(top_markers_RFE_RF_wb,
           sheet = "Common Markers",
           withFilter = T)
 
+caption = data.frame(Description = 'This file contains the top markers generated by the RF modeling approach. Marker is the name of the SNP marker. Chromosome is the chromosome. Position is the position in base pairs. Replicates are the results in MDI for each marker by each replicate.')
+
+addWorksheet(top_markers_RFE_RF_wb, sheetName = "Caption")
+
+writeData(top_markers_RFE_RF_wb,
+          caption,
+          sheet = "Caption")
+
 # Save the workbook
 saveWorkbook(top_markers_RFE_RF_wb,
        'Results/Top_markers_RFE_RF_Jm_Jr_31.09.xlsx',
@@ -2481,6 +2573,14 @@ lapply(all_res, FUN = function(x){
             withFilter = T)
   
 })
+
+caption = data.frame(Description = 'This file contains the top markers generated by the rrBLUP modeling approach. Marker is the name of the SNP marker. Chromosome is the chromosome. Position is the position in base pairs. Replicates are the effect sizes for each marker by each replicate.')
+
+addWorksheet(top_markers_rrBLUP_wb, sheetName = "Caption")
+
+writeData(top_markers_rrBLUP_wb,
+          caption,
+          sheet = "Caption")
 
 saveWorkbook(top_markers_rrBLUP_wb,
        'Results/Top_markers_rrBLUP_Jm_Jr_31.09.xlsx',
@@ -2557,18 +2657,12 @@ saveWorkbook(top_markers_QTls_wb,
 
 ## Save manhattan plots to one figure
 ```{r}
-manhattans = ggpubr::ggarrange(RLN_2Y$manhattan_plot,
-                              RLN_3Y$manhattan_plot,
-                              Height_2Y$manhattan_plot,
-                              Height_3Y$manhattan_plot,
-                              CG_Avg$manhattan_plot,
-                              PHY_Avg$manhattan_plot,
-                              labels = c('(A)',
-                                         '(B)',
-                                         '(C)', 
-                                         '(D)',
-                                         '(E)',
-                                         '(F)'),
+manhattans = ggpubr::ggarrange(all_res$RLN_2Y$manhattan_plot,
+                              all_res$RLN_3Y$manhattan_plot,
+                              all_res$Height_2Y$manhattan_plot,
+                              all_res$Height_3Y$manhattan_plot,
+                              all_res$CG_Avg$manhattan_plot,
+                              all_res$PHY_Avg$manhattan_plot,
                               nrow = 3,
                               ncol = 2)
 
