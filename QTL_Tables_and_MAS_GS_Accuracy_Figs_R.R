@@ -1,0 +1,655 @@
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+knitr::opts_chunk$set(echo = TRUE)
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+pacman::p_load(data.table,
+               dplyr,
+               flextable,
+               ggplot2,
+               ggprism,
+               ggtext,
+               kableExtra,
+               officer,
+               openxlsx,
+               sjPlot,
+               stringr,
+               tidytext,
+               tidyr,
+               tibble)
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Perf = list()
+
+Perf$perf_01 = read.xlsx('Results/prediction_selection_performances_Jm_Jr_31.01.xlsx',
+                    sheet = 1) %>% 
+  mutate(`Female Parent` = '31.01') 
+
+
+
+Perf$perf_09 = read.xlsx('Results/prediction_selection_performances_Jm_Jr_31.09.xlsx',
+                    sheet = 1) %>% 
+  mutate(`Female Parent` = '31.09') 
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Perf$both = rbind(Perf$perf_01, Perf$perf_09) %>% 
+  mutate(
+    # Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i><br>Disease Score',
+    #                        Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp.<br>Disease Score',
+    #                        Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i><br>Counts',
+    #                        Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i><br>Counts',
+    #                        Trait == 'Height_2Y' ~ 'Two-year Tree<br>Height',
+    #                        Trait == 'Height_3Y' ~ 'Three-year Tree<br>Height',
+    #                        T ~ ''),
+         `Method + Female Parent` = paste0(Method, ' ', `Female Parent`),
+         `Trait + Method + Female Parent` = paste0(Trait, ' ', Method, ' ', `Female Parent`)
+         )
+  
+
+Perf$Stars = Perf$both %>% 
+  group_by(Trait,
+           Method,
+           `Female Parent`,
+           `Method + Female Parent`) %>%
+  summarise(`Avg. p-value` = mean(`P.value`),
+            Cor = mean(Cor) %>% 
+              format(., digits = 2) %>% 
+              as.numeric(.)) %>% 
+  ungroup() %>% 
+  mutate(Stars = case_when(data.table::between(`Avg. p-value`, 0.01, 0.05) ~ '*',
+                           data.table::between(`Avg. p-value`, 0.001, 0.01) ~ '**',
+                           `Avg. p-value` < 0.001 ~ '***',
+                           T ~ ''))
+
+Perf$Stars2 = Perf$Stars %>% 
+  mutate(Cor = paste0(Cor, ' ', Stars)) %>% 
+  select(Trait,
+         Method,
+         `Female Parent`,
+         Cor) %>% 
+  pivot_wider(names_from = Trait,
+              values_from = Cor) %>% 
+  select(Method,
+         `Female Parent`,
+         CG_Avg,
+         PHY_Avg,
+         Height_3Y,
+         RLN_3Y,
+         Height_2Y,
+         RLN_2Y)
+
+Perf$Summary = Perf$both %>% 
+  group_by(Trait,
+           Method,
+           `Female Parent`) %>%
+  summarise(`Avg. p-value` = mean(`P.value`),
+            Cor = mean(Cor)) %>% 
+  pivot_wider(names_from = Trait,
+              values_from = c(Cor, `Avg. p-value`),
+              names_sep = ' ')
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+# Create the flextable
+Perf$ft <- flextable(Perf$Stars2)
+
+# Customize headers, including italic text
+Perf$ft <- Perf$ft %>%
+  set_table_properties(width = 1,
+                       layout = "autofit") %>% # Fit table to page width
+  compose(
+    j = "CG_Avg",
+    part = "header",
+    value = as_paragraph(as_i("A. tumefaciens"),
+                         as_chunk('\nDisease Score'))  # Italicize "(units)"
+  ) %>%
+  compose(
+    j = "PHY_Avg",
+    part = "header",
+    value = as_paragraph(as_i("Phytophthora"),
+                         ' spp.',
+                         as_chunk('\nDisease Score'))  # Add a superscript for notes
+  ) %>%
+  compose(
+    j = "RLN_2Y",
+    part = "header",
+    value = as_paragraph(as_chunk('Two-year\n'),
+                         as_i("P. vulnus"),
+                         as_chunk('\nCounts'))  # Add a superscript for notes
+  ) %>%
+  compose(
+    j = "RLN_3Y",
+    part = "header",
+    value = as_paragraph(as_chunk('Three-year\n'),
+                         as_i("P. vulnus"),
+                         as_chunk('\nCounts'))  # Add a superscript for notes
+  ) %>%
+  compose(
+    j = "Height_2Y",
+    part = "header",
+    value = as_paragraph('Two-year',
+                         as_chunk('\nTree Height'))  # Add a superscript for notes
+  ) %>%
+  compose(
+    j = "Height_3Y",
+    part = "header",
+    value = as_paragraph('Three-year',
+                         as_chunk('\nTree Height'))  # Add a superscript for notes
+  ) %>%
+  bold(part = "header") %>%
+  bg(part = "header", bg = "#D9E1F2") %>%
+  align(j = 1:ncol(Perf$Stars2), align = "center", part = "all") %>%
+  autofit() %>%
+  font(fontname = "Times New Roman", part = "all") %>%
+  fontsize(size = 10, part = "all") %>%
+  hline_top(border = fp_border(color = "black", width = 2)) %>%
+  hline_bottom(border = fp_border(color = "black", width = 2)) %>%
+  hline(border = fp_border(color = "gray", width = 1), part = "body")
+
+# Export to Word
+read_docx() %>%
+  body_add_flextable(Perf$ft) %>%
+  print(target = "Results/Performance_table.docx")
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Perf$lm = lm(Cor ~ Method+`Female Parent`, data = Perf$both)
+
+summary(Perf$lm)
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Perf$p = ggplot(Perf$both, aes(Method, Cor, 
+                     fill = Method
+                     ))+
+  geom_boxplot(color = 'black')+
+  theme_prism()+
+  scale_fill_viridis_d()+
+  geom_text(data = Perf$Stars, aes(Method, Cor, label = Stars),
+            vjust = -2.2,
+            size = 7,
+            fontface = 'bold')+
+  ylim(c(0,1.05))+
+  # geom_hline(yintercept = 1,
+  #            linetype = 'dashed')+
+  scale_x_reordered()+
+  theme(
+    axis.text.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    strip.text = element_markdown(face = "bold"),
+    strip.text.y = element_text(angle = 0),
+    panel.background = element_rect(color = NA, fill = "#F0F0F0"))+
+ylab(label = 'r')+
+facet_grid(`Female Parent`~Trait,
+             # nrow = 6,
+             axes = 'all',
+             scales = 'free_y')
+
+Perf$p
+
+sjPlot::save_plot(filename = 'Results/Performance_boxplots.png',
+                  fig = Perf$p,
+                  width = 40,
+                  height = 18)
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Perf$method_FP = Perf$both %>% 
+  select(Trait,
+         Cor,
+         `Method + Female Parent`,
+         # ID
+         ) %>% 
+  pivot_wider(id_cols = everything(),
+              names_from = `Method + Female Parent`,
+              values_from = Cor)
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Perf$Traits = pairwise.t.test(Perf$both$Cor, Perf$both$`Trait + Method + Female Parent`,
+                         p.adjust.method = 'BH')$p.value %>% 
+  as.table() %>% 
+  as.data.frame()
+
+Perf$Significant = Perf$Traits %>% 
+  filter(Freq <= 0.05)
+
+Perf$Insignificant = Perf$Traits %>% 
+  filter(Freq > 0.05)
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Selection = list()
+
+Selection$Selection_01 = read.xlsx('Results/prediction_selection_performances_Jm_Jr_31.01.xlsx',
+                    sheet = 2) %>% 
+  mutate(`Female Parent` = '31.01') 
+
+
+
+Selection$Selection_09 = read.xlsx('Results/prediction_selection_performances_Jm_Jr_31.09.xlsx',
+                    sheet = 2) %>% 
+  mutate(`Female Parent` = '31.09') 
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Selection$both = rbind(Selection$Selection_01, Selection$Selection_09) %>%
+  mutate(
+    # Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i><br>Disease Score',
+    #                        Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp.<br>Disease Score',
+    #                        Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i><br>Counts',
+    #                        Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i><br>Counts',
+    #                        Trait == 'Height_2Y' ~ 'Two-year Tree<br>Height',
+    #                        Trait == 'Height_3Y' ~ 'Three-year Tree<br>Height',
+    #                        T ~ ''),
+         Estimate = format(Estimate, digits = 3) %>% 
+           as.numeric(.),
+         `Method + Female Parent` = paste0(Method, ' ', `Female Parent`),
+         `Trait + Method + Female Parent` = paste0(Trait, ' ', Method, ' ', `Female Parent`),
+         Stat = ifelse(Stat == 'Mean of x', 'Selection', 'No Selection'),
+         Stat_Numeric = ifelse(Stat == 'Selection', 0, 1)
+         ) %>% 
+  group_by(Stat,
+           Trait,
+           Method,
+           `Female Parent`,
+           `Method + Female Parent`) %>%
+  mutate(`Avg. Estimate` = mean(Estimate) %>% 
+           format(., digits = 3) %>% 
+           as.numeric(.)) %>% 
+  ungroup()
+  
+
+Selection$Stars = Selection$both %>% 
+  summarise(`Avg. p-value` = mean(`P.value`),
+            .by = c(Stat,
+                    Stat_Numeric,
+                    `Avg. Estimate`,
+                    Trait,
+                    Method,
+                    `Female Parent`,
+                    `Method + Female Parent`)) %>% 
+  mutate(Stars = case_when(data.table::between(`Avg. p-value`, 0.05, 0.1) ~ '.',
+                           data.table::between(`Avg. p-value`, 0.01, 0.05) ~ '*',
+                           data.table::between(`Avg. p-value`, 0.001, 0.01) ~ '**',
+                           `Avg. p-value` < 0.001 ~ '***',
+                           T ~ '')) %>% 
+  group_by(Trait,
+           Method,
+           `Female Parent`) %>% 
+  mutate(Mean_Avg_Estimate = mean(`Avg. Estimate`)) %>% 
+  ungroup()
+
+Selection$Stars2 = Selection$Stars %>% 
+  mutate(`Avg. Estimate` = paste0(`Avg. Estimate`, ' ', Stars)) %>% 
+  select(Stat,
+         Trait,
+         Method,
+         `Female Parent`,
+         `Avg. Estimate`) %>% 
+  pivot_wider(names_from = Trait,
+              values_from = `Avg. Estimate`) %>% 
+  arrange(Method) %>% 
+  select(Stat,
+         Method,
+         `Female Parent`,
+         CG_Avg,
+         PHY_Avg,
+         Height_3Y,
+         RLN_3Y,
+         Height_2Y,
+         RLN_2Y)
+
+Selection$Summary = Selection$both %>% 
+  group_by(Stat,
+           Trait,
+           Method,
+           `Female Parent`) %>%
+  summarise(`Avg. p-value` = mean(`P.value`),
+            `Avg. Estimate` = mean(Estimate)) %>% 
+  pivot_wider(names_from = Trait,
+              values_from = c(`Avg. Estimate`, `Avg. p-value`),
+              names_sep = ' ') %>% 
+  arrange(Method)
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+ggplot(Selection$both, aes(Trait, log2(P.value)*-1))+
+  geom_boxplot()+
+  geom_hline(yintercept = log2(0.05)*-1,
+             linetype = 'dashed',
+             color = 'red')+
+  theme_prism()+
+  theme(axis.text.x = element_markdown(angle = 90))+
+  facet_wrap(`Female Parent`~Method)
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+# Create the flextable
+Selection$ft <- flextable(Selection$Stars2)
+
+# Customize headers, including italic text
+Selection$ft <- Selection$ft %>%
+  set_table_properties(width = 1,
+                       layout = "autofit") %>% # Fit table to page width
+  compose(
+    j = "CG_Avg",
+    part = "header",
+    value = as_paragraph(as_i("A. tumefaciens"),
+                         as_chunk('\nDisease Score'))  # Italicize "(units)"
+  ) %>%
+  compose(
+    j = "PHY_Avg",
+    part = "header",
+    value = as_paragraph(as_i("Phytophthora"),
+                         ' spp.',
+                         as_chunk('\nDisease Score'))  # Add a superscript for notes
+  ) %>%
+  compose(
+    j = "RLN_2Y",
+    part = "header",
+    value = as_paragraph(as_chunk('Two-year\n'),
+                         as_i("P. vulnus"),
+                         as_chunk('\nCounts'))  # Add a superscript for notes
+  ) %>%
+  compose(
+    j = "RLN_3Y",
+    part = "header",
+    value = as_paragraph(as_chunk('Three-year\n'),
+                         as_i("P. vulnus"),
+                         as_chunk('\nCounts'))  # Add a superscript for notes
+  ) %>%
+  compose(
+    j = "Height_2Y",
+    part = "header",
+    value = as_paragraph('Two-year',
+                         as_chunk('\nTree Height'))  # Add a superscript for notes
+  ) %>%
+  compose(
+    j = "Height_3Y",
+    part = "header",
+    value = as_paragraph('Three-year',
+                         as_chunk('\nTree Height'))  # Add a superscript for notes
+  ) %>%
+  bold(part = "header") %>%
+  bg(part = "header", bg = "#D9E1F2") %>%
+  align(j = 1:ncol(Selection$Stars2), align = "center", part = "all") %>%
+  autofit() %>%
+  font(fontname = "Times New Roman", part = "all") %>%
+  fontsize(size = 10, part = "all") %>%
+  hline_top(border = fp_border(color = "black", width = 2)) %>%
+  hline_bottom(border = fp_border(color = "black", width = 2)) %>%
+  hline(border = fp_border(color = "gray", width = 1), part = "body")
+
+# Export to Word
+read_docx() %>%
+  body_add_flextable(Selection$ft) %>%
+  print(target = "Results/Prediction_table.docx")
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Selection$lm_dat = Selection$both %>% 
+  summarise(estimate_effect = diff(Estimate),
+            .by = c(Replicate,
+                    Trait,
+                    Method,
+                    `Female Parent`)) %>% 
+  mutate(Scaled_effect = scale(estimate_effect),
+         .by = Trait)
+
+Selection$lm = lm(Scaled_effect ~ Method + `Female Parent` + Trait, data = Selection$lm_dat)
+
+summary(Selection$lm)
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+ggplot(Selection$lm_dat, aes(`Female Parent`, Scaled_effect))+
+  geom_boxplot()+
+  theme_prism()+
+  facet_wrap(~Trait)
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Selection$p = ggplot(Selection$both, aes(Stat_Numeric, `Estimate`, 
+                     fill = Stat))+
+  geom_boxplot(color = 'black')+
+  theme_prism()+
+  scale_fill_viridis_d()+
+  geom_text(data = Selection$Stars, aes(mean(Stat_Numeric), Mean_Avg_Estimate, label = Stars),
+            inherit.aes = F,
+            size = 7,
+            fontface = 'bold')+
+  scale_x_reordered()+
+  theme(axis.title.x = element_blank(),
+    strip.text = element_markdown(face = 'bold'),
+    strip.text.y = element_text(angle = 0),
+    panel.background = element_rect(color = NA, fill = "#F0F0F0"))+
+  facet_grid(Trait~Method+`Female Parent`,
+             # nrow = 6,
+             axes = 'all',
+             scales = 'free_y')
+
+Selection$p
+
+sjPlot::save_plot(filename = 'Results/Selection_boxplots.png',
+                  fig = Selection$p,
+                  width = 35,
+                  height = 25)
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Stats_Tables_31.01 = list()
+
+Stats_Tables_31.01$GST = read.csv('Results/Gen_Stats_Table_JmJr_31.01.csv',
+                            check.names = F)
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Stats_Tables_31.01$GST1 = Stats_Tables_31.01$GST %>% 
+  mutate(Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i> Disease Score',
+                           Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp. Disease Score',
+                           Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i> Counts',
+                           Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i> Counts',
+                           Trait == 'Height_2Y' ~ 'Two-year Tree Height',
+                           Trait == 'Height_3Y' ~ 'Three-year Tree Height',
+                           T ~ '')) %>%
+  rename_with(~ gsub('Distance', 'Length (bp)', .x) %>% 
+                gsub('Markers', 'Unique Markers', .))  
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+# Create the flextable
+Stats_Tables_31.01$GST2 <- flextable(Stats_Tables_31.01$GST1)
+
+# Customize headers, including italic text
+Stats_Tables_31.01$GST2 <- Stats_Tables_31.01$GST2 %>%
+  set_table_properties(width = 1,
+                       layout = "autofit") %>% # Fit table to page width
+  compose(
+    j = "Trait",
+    part = "body",
+    value = as_paragraph(
+      as_chunk(gsub("<i>(.*?)</i>", "\\1", Trait))
+    )
+  ) %>%
+  bold(part = "header") %>%
+  bg(part = "header", bg = "#D9E1F2") %>%
+  align(j = 1:ncol(Stats_Tables_31.01$GST1), align = "center", part = "all") %>%
+  autofit() %>%
+  font(fontname = "Times New Roman", part = "all") %>%
+  fontsize(size = 10, part = "all") %>%
+  hline_top(border = fp_border(color = "black", width = 2)) %>%
+  hline_bottom(border = fp_border(color = "black", width = 2)) %>%
+  hline(border = fp_border(color = "gray", width = 1), part = "body")
+
+# Export to Word
+read_docx() %>%
+  body_add_flextable(Stats_Tables_31.01$GST2) %>%
+  print(target = "Results/Gen_Stats_table_JmJr_31.01.docx")
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Stats_Tables_31.01$TST = read.csv('Results/Top_Stats_Table_JmJr_31.01.csv',
+                            check.names = F)
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Stats_Tables_31.01$TST1 = Stats_Tables_31.01$TST %>% 
+  mutate(Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i> Disease Score',
+                           Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp. Disease Score',
+                           Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i> Counts',
+                           Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i> Counts',
+                           Trait == 'Height_2Y' ~ 'Two-year Tree Height',
+                           Trait == 'Height_3Y' ~ 'Three-year Tree Height',
+                           T ~ ''),
+         Marker = gsub('^X', '', Marker)) %>% 
+  rename_with(~ gsub('chr', 'Chromosome', .x) %>% 
+                gsub('lod', 'LOD', .) %>% 
+                gsub('adj.r.squared', 'Percent Variance Explained', .) %>% 
+                gsub('Marker', 'Marker(s)', .) %>% 
+                gsub('Length', 'Length (bp)', .))
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+# Create the flextable
+Stats_Tables_31.01$TST2 <- flextable(Stats_Tables_31.01$TST1)
+
+# Customize headers, including italic text
+Stats_Tables_31.01$TST2 <- Stats_Tables_31.01$TST2 %>%
+  set_table_properties(width = 1,
+                       layout = "autofit") %>% # Fit table to page width
+  compose(
+    j = "Trait",
+    part = "body",
+    value = as_paragraph(
+      as_chunk(gsub("<i>(.*?)</i>", "\\1", Trait))
+    )
+  ) %>%
+  bold(part = "header") %>%
+  bg(part = "header", bg = "#D9E1F2") %>%
+  align(j = 1:ncol(Stats_Tables_31.01$TST1), align = "center", part = "all") %>%
+  autofit() %>%
+  font(fontname = "Times New Roman", part = "all") %>%
+  fontsize(size = 10, part = "all") %>%
+  hline_top(border = fp_border(color = "black", width = 2)) %>%
+  hline_bottom(border = fp_border(color = "black", width = 2)) %>%
+  hline(border = fp_border(color = "gray", width = 1), part = "body")
+
+# Export to Word
+read_docx() %>%
+  body_add_flextable(Stats_Tables_31.01$TST2) %>%
+  print(target = "Results/Top_Stats_table_JmJr_31.01.docx")
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Stats_Tables_31.09 = list()
+
+Stats_Tables_31.09$GST = read.csv('Results/Gen_Stats_Table_JmJr_31.09.csv',
+                            check.names = F)
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Stats_Tables_31.09$GST1 = Stats_Tables_31.09$GST %>% 
+  mutate(Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i> Disease Score',
+                           Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp. Disease Score',
+                           Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i> Counts',
+                           Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i> Counts',
+                           Trait == 'Height_2Y' ~ 'Two-year Tree Height',
+                           Trait == 'Height_3Y' ~ 'Three-year Tree Height',
+                           T ~ ''),
+         Distance = ifelse(is.na(Distance), 0, Distance)) %>%
+  rename_with(~ gsub('Distance', 'Length (bp)', .x) %>% 
+                gsub('Markers', 'Unique Markers', .))  
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+# Create the flextable
+Stats_Tables_31.09$GST2 <- flextable(Stats_Tables_31.09$GST1)
+
+# Customize headers, including italic text
+Stats_Tables_31.09$GST2 <- Stats_Tables_31.09$GST2 %>%
+  set_table_properties(width = 1,
+                       layout = "autofit") %>% # Fit table to page width
+  compose(
+    j = "Trait",
+    part = "body",
+    value = as_paragraph(
+      as_chunk(gsub("<i>(.*?)</i>", "\\1", Trait))
+    )
+  ) %>%
+  bold(part = "header") %>%
+  bg(part = "header", bg = "#D9E1F2") %>%
+  align(j = 1:ncol(Stats_Tables_31.09$GST1), align = "center", part = "all") %>%
+  autofit() %>%
+  font(fontname = "Times New Roman", part = "all") %>%
+  fontsize(size = 10, part = "all") %>%
+  hline_top(border = fp_border(color = "black", width = 2)) %>%
+  hline_bottom(border = fp_border(color = "black", width = 2)) %>%
+  hline(border = fp_border(color = "gray", width = 1), part = "body")
+
+# Export to Word
+read_docx() %>%
+  body_add_flextable(Stats_Tables_31.09$GST2) %>%
+  print(target = "Results/Gen_Stats_table_JmJr_31.09.docx")
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Stats_Tables_31.09$TST = read.csv('Results/Top_Stats_Table_JmJr_31.09.csv',
+                            check.names = F)
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+Stats_Tables_31.09$TST1 = Stats_Tables_31.09$TST %>% 
+  mutate(Trait = case_when(Trait == 'CG_Avg' ~ '<i>A. tumefaciens</i> Disease Score',
+                           Trait == 'PHY_Avg' ~ '<i>Phytophthora</i> spp. Disease Score',
+                           Trait == 'RLN_2Y' ~ 'Two-year <i>P. vulnus</i> Counts',
+                           Trait == 'RLN_3Y' ~ 'Three-year <i>P. vulnus</i> Counts',
+                           Trait == 'Height_2Y' ~ 'Two-year Tree Height',
+                           Trait == 'Height_3Y' ~ 'Three-year Tree Height',
+                           T ~ ''),
+         Marker = gsub('^X', '', Marker)) %>% 
+  rename_with(~ gsub('chr', 'Chromosome', .x) %>% 
+                gsub('lod', 'LOD', .) %>% 
+                gsub('adj.r.squared', 'Percent Variance Explained', .) %>% 
+                gsub('Marker', 'Marker(s)', .) %>% 
+                gsub('Length', 'Length (bp)', .))
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+# Create the flextable
+Stats_Tables_31.09$TST2 <- flextable(Stats_Tables_31.09$TST1)
+
+# Customize headers, including italic text
+Stats_Tables_31.09$TST2 <- Stats_Tables_31.09$TST2 %>%
+  set_table_properties(width = 1,
+                       layout = "autofit") %>% # Fit table to page width
+  compose(
+    j = "Trait",
+    part = "body",
+    value = as_paragraph(
+      as_chunk(gsub("<i>(.*?)</i>", "\\1", Trait))
+    )
+  ) %>%
+  bold(part = "header") %>%
+  bg(part = "header", bg = "#D9E1F2") %>%
+  align(j = 1:ncol(Stats_Tables_31.09$TST1), align = "center", part = "all") %>%
+  autofit() %>%
+  font(fontname = "Times New Roman", part = "all") %>%
+  fontsize(size = 10, part = "all") %>%
+  hline_top(border = fp_border(color = "black", width = 2)) %>%
+  hline_bottom(border = fp_border(color = "black", width = 2)) %>%
+  hline(border = fp_border(color = "gray", width = 1), part = "body")
+
+# Export to Word
+read_docx() %>%
+  body_add_flextable(Stats_Tables_31.09$TST2) %>%
+  print(target = "Results/Top_Stats_table_JmJr_31.09.docx")
+
+
+## ---------------------------------------------------------------------------------------------------------------------------------------------------
+knitr::purl('QTL_Tables_and_MAS_GS_Accuracy_Figs2.qmd', 
+            output = 'QTL_Tables_and_MAS_GS_Accuracy_Figs_R.R')
+
