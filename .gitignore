@@ -1,0 +1,76 @@
+# README.md
+# GS_SCRI_ROOT_SNPs_Rqtl_Jm_Jr_31.01.qmd
+# GS_SCRI_ROOT_SNPs_Rqtl_Jm_Jr_31.09.qmd
+# QTL_Tables_and_MAS_GS_Accuracy_Figs2.qmd
+# QTL_Tables_and_MAS_GS_Accuracy_Figs_R.R
+# Ramasamy_et_al_raw_SNPs_Jm_31.01.qmd
+# Ramasamy_et_al_raw_SNPs_Jm_31.09.qmd
+# Ramasamy_et_al_raw_SNPs_Jr_31.01.qmd
+# Ramasamy_et_al_raw_SNPs_Jr_31.09.qmd
+# Wrangling_SCRI_Root_Phenotype_Data_2
+
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+All_Traits_QTL_Selection_Results_Jm_Jr_31.01.RData
+All_Traits_QTL_Selection_Results_Jm_Jr_31.01_no_RFE.RData
+All_Traits_QTL_Selection_Results_Jm_Jr_31.09.RData
+All_Traits_QTL_Selection_Results_Jm_Jr_31.09_no_RFE.RData
+Clean_SNP_BLAST_Results.qmd
+GBS_seqs_matched_Jm_Jr_31.01_31.09.txt
+GBS_sequences_Ramasamy.fasta
+GBS_sequences_Ramasamy.txt
+GS_SCRI_ROOT_SNPs_Jm_31.01_31.09_blast.qmd
+GS_SCRI_ROOT_SNPs_Rqtl_Jm_31.01.qmd
+GS_SCRI_ROOT_SNPs_Rqtl_Jm_31.09.qmd
+
+GS_SCRI_ROOT_SNPs_Rqtl_Jr_31.01.qmd
+GS_SCRI_ROOT_SNPs_Rqtl_Jr_31.09.qmd
+Machine_Learning_QTL.Rproj
+Machine_Learning_SCRI_ROOT_SNPs_files/
+Old_Code/
+Phenotype_Data/
+Prediction_performance_figures.R
+Prediction_performance_figures.qmd
+
+
+R_qtl.qmd
+R_qtl_SCRI_Root_SNPs_Jm_31.01.csv
+R_qtl_SCRI_Root_SNPs_Jm_31.09.csv
+R_qtl_SCRI_Root_SNPs_Jr_31.01.csv
+R_qtl_SCRI_Root_SNPs_Jr_31.09.csv
+R_qtl_data/
+Ramasamy_et_al_raw_SNPs_Jm_31.01_31.09_blast.qmd
+Ramasamy_phenotype_clean.qmd
+Results/
+SCRI_ROOT_SNPs_cleaned_Jm_31.01.csv
+SCRI_ROOT_SNPs_cleaned_Jm_31.01_31.09_blast.csv
+SCRI_ROOT_SNPs_cleaned_Jm_31.09.csv
+SCRI_ROOT_SNPs_cleaned_Jr_31.01.csv
+SCRI_ROOT_SNPs_cleaned_Jr_31.09.csv
+SCRI_ROOT_SNPs_cleaned_RFE_Jm_31.01.csv
+SCRI_ROOT_SNPs_cleaned_RFE_Jm_31.09.csv
+SCRI_ROOT_SNPs_cleaned_RFE_Jr_31.01.csv
+SCRI_ROOT_SNPs_cleaned_RFE_Jr_31.09.csv
+SCRI_ROOT_SNPs_cleaned_rQTL_Jm_31.01.csv
+SCRI_ROOT_SNPs_cleaned_rQTL_Jm_31.09.csv
+SCRI_ROOT_SNPs_cleaned_rQTL_Jr_31.01.csv
+SCRI_ROOT_SNPs_cleaned_rQTL_Jr_31.09.csv
+SCRI_ROOT_SNPs_rrBLUP.qmd
+SCRI_Root_SNP_Jm_31.01.csv
+SCRI_Root_SNP_Jm_31.09.csv
+SCRI_Root_SNP_Jr_31.01.csv
+SCRI_Root_SNP_Jr_31.09.csv
+SCRI_Root_SNPs_all_raw_from_paper.xlsx
+SNPs_PCA_Jm_Jr_31.01.qmd
+SNPs_PCA_Jm_Jr_31.09.qmd
+blasted_Jm_31.01_31.09_SNPs.csv
+rfe_results_NEM_2and3_year_length_2and3_year_CG_PHY_Jm_31.01.RData
+rfe_results_NEM_2and3_year_length_2and3_year_CG_PHY_Jm_31.01_31.09_blast.RData
+rfe_results_NEM_2and3_year_length_2and3_year_CG_PHY_Jm_31.09.RData
+rfe_results_NEM_2and3_year_length_2and3_year_CG_PHY_Jm_Jr_31.01.RData
+rfe_results_NEM_2and3_year_length_2and3_year_CG_PHY_Jm_Jr_31.09.RData
+rfe_results_NEM_2and3_year_length_2and3_year_CG_PHY_Jr_31.01.RData
+rfe_results_NEM_2and3_year_length_2and3_year_CG_PHY_Jr_31.09.RData
+scp_GBS_seqs_Ramasamy.sh*
